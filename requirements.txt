@@ -1,0 +1,26 @@
+# Core dependencies
+pydantic>=2.0.0
+pydantic-ai>=0.1.0
+
+# Async HTTP
+aiohttp>=3.9.0
+aiofiles>=23.0.0
+
+# RSS parsing
+feedparser>=6.0.0
+
+# SSL certificates
+certifi>=2023.0.0
+
+# Google Gemini (for legacy compatibility)
+google-genai>=1.0.0
+
+# Observability (optional)
+logfire>=0.50.0
+
+# Vector memory (optional)
+chromadb>=0.4.0
+
+# Development
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
