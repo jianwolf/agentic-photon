@@ -11,108 +11,126 @@ Agentic Photon is a PydanticAI-powered news analysis pipeline that:
 ## Architecture
 
 ```
-RSS Feeds → Async Fetch → Dedup → Classifier → [Important?]
-                                                    │
-                                    ┌───────────────┴───────────────┐
-                                    ↓                               ↓
-                            Researcher Agent                   Save Empty
-                                    │
-                        ┌───────────┼───────────┐
-                        ↓           ↓           ↓
-                    Search      Fetch URL   Query DB
-                        │           │           │
-                        └───────────┼───────────┘
-                                    ↓
-                            Research Report → Notifications
+RSS Feeds (17 sources)
+       │
+       ▼
+  Async Fetch ──► Dedup ──► Classifier Agent
+                               │
+                 ┌─────────────┴─────────────┐
+                 │                           │
+            Important                   Not Important
+                 │                           │
+                 ▼                           ▼
+        Researcher Agent              Save & Skip
+                 │
+    ┌────────────┼────────────┐
+    │            │            │
+ Search     Fetch URL    Query DB
+    │            │            │
+    └────────────┼────────────┘
+                 │
+                 ▼
+          Research Report
+                 │
+    ┌────────────┼────────────┐
+    │            │            │
+ Markdown    Webhook      JSONL
 ```
 
-## Key Files
+## Key Files Reference
 
-| File | Purpose |
-|------|---------|
-| `main.py` | CLI entry point |
-| `pipeline.py` | Main orchestration |
-| `config.py` | Environment-based configuration |
-| `database.py` | SQLite operations |
-| `feeds.py` | Async RSS fetching |
-| `notifications.py` | Reports and alerts |
+### Core Pipeline
+
+| File | Purpose | Key Functions |
+|------|---------|---------------|
+| `main.py` | CLI entry point | `main()`, `cmd_run()`, `cmd_status()` |
+| `pipeline.py` | Main orchestration | `Pipeline.run_once()`, `Pipeline.run_continuous()` |
+| `config.py` | Configuration | `Config.load()`, `Config.validate()` |
+| `database.py` | SQLite storage | `Database.save()`, `Database.seen_hashes()` |
+| `feeds.py` | RSS fetching | `fetch_all_feeds()` |
+| `notifications.py` | Output | `save_markdown_report()`, `notify_batch()` |
 
 ### Agents
 
-| File | Purpose |
-|------|---------|
-| `agents/classifier.py` | `ClassifierAgent` - fast importance classification |
-| `agents/researcher.py` | `ResearcherAgent` - deep analysis with tools |
+| File | Class | Description |
+|------|-------|-------------|
+| `agents/classifier.py` | `ClassifierAgent` | Fast importance classification using Gemini Flash |
+| `agents/researcher.py` | `ResearcherAgent` | Deep analysis with web search, fetch, and history tools |
 
 ### Models
 
-| File | Purpose |
-|------|---------|
-| `models/story.py` | `Story` - RSS feed item |
-| `models/classification.py` | `ClassificationResult`, `ImportanceCategory` |
-| `models/research.py` | `ResearchReport`, `Analysis` |
+| File | Classes | Description |
+|------|---------|-------------|
+| `models/story.py` | `Story` | RSS feed item with dedup hash |
+| `models/classification.py` | `ClassificationResult`, `ImportanceCategory` | Classification output |
+| `models/research.py` | `ResearchReport`, `Analysis` | Research output |
 
-### Tools
+### Tools (Used by ResearcherAgent)
 
-| File | Purpose |
-|------|---------|
-| `tools/search.py` | Web search (placeholder) |
-| `tools/fetch.py` | Article content extraction |
-| `tools/database.py` | Story history queries |
+| File | Function | Status |
+|------|----------|--------|
+| `tools/search.py` | `web_search()` | Placeholder - returns empty results |
+| `tools/fetch.py` | `fetch_article()` | Active - fetches and parses HTML |
+| `tools/database.py` | `query_related_stories()` | Active - keyword search on history |
 
-## Pipeline Flow
+### Optional Features
 
-1. **Fetch**: `fetch_all_feeds()` concurrently fetches all RSS feeds
-2. **Dedup**: `db.seen_hashes()` filters already-processed stories
-3. **Classify**: `ClassifierAgent.classify_batch()` determines importance
-4. **Analyze**: `ResearcherAgent.analyze_batch()` processes important stories
-5. **Save**: `db.save()` stores all results
-6. **Notify**: `notify_batch()` sends reports/webhooks
+| File | Feature | Enable With |
+|------|---------|-------------|
+| `memory/vector_store.py` | Semantic search via ChromaDB | `ENABLE_MEMORY=true` |
+| `observability/tracing.py` | Distributed tracing via Logfire | `ENABLE_LOGFIRE=true` |
 
-## Configuration
+## Pipeline Flow Details
 
-All configuration via environment variables:
+1. **Prune**: Delete records older than `PRUNE_AFTER_DAYS`
+2. **Fetch**: Concurrent RSS fetching with SSL fallback
+3. **Dedup**: Filter stories already in database by hash
+4. **Classify**: Run `ClassifierAgent.classify_batch()` on new stories
+5. **Split**: Separate important (researcher) from not-important (skip)
+6. **Analyze**: Run `ResearcherAgent.analyze_batch()` on important stories
+7. **Save**: Store all results in SQLite
+8. **Notify**: Generate reports, send webhooks, append JSONL
+
+## Configuration Reference
 
 ```bash
-# Required
-GEMINI_API_KEY=...
+# === Required ===
+GEMINI_API_KEY=your-api-key
 
-# Models
+# === Models (PydanticAI format) ===
 CLASSIFIER_MODEL=google-gla:gemini-2.0-flash
 RESEARCHER_MODEL=google-gla:gemini-2.0-flash
 
-# Pipeline
-LANGUAGE=zh          # zh or en
-MAX_AGE_HOURS=720    # 30 days
-POLL_INTERVAL_SECONDS=300
+# === Output ===
+LANGUAGE=zh                    # 'zh' (Chinese) or 'en' (English)
+DB_PATH=news.db               # SQLite database
+REPORTS_DIR=reports           # Markdown reports
+LOG_DIR=log                   # Log files
 
-# Output
-DB_PATH=news.db
-REPORTS_DIR=reports
-LOG_DIR=log
+# === Pipeline Behavior ===
+MAX_AGE_HOURS=720             # 30 days
+POLL_INTERVAL_SECONDS=300     # 5 minutes
+MAX_WORKERS=8                 # Concurrent operations
 
-# Optional notifications
-NOTIFICATION_WEBHOOK_URL=
-ALERTS_FILE=
+# === Notifications ===
+NOTIFICATION_WEBHOOK_URL=     # Optional webhook
+ALERTS_FILE=                  # Optional JSONL file
 
-# Optional features
-ENABLE_MEMORY=false   # ChromaDB
-ENABLE_LOGFIRE=false  # Tracing
+# === Optional Features ===
+ENABLE_MEMORY=false           # ChromaDB vector search
+ENABLE_LOGFIRE=false          # Distributed tracing
 ```
 
-## CLI Usage
+## CLI Commands
 
 ```bash
-# Run pipeline once
+# Run once
 python main.py run
 
 # Run with English output
 python main.py run --lang en
 
-# Continuous mode
-python main.py run -c
-
-# Custom poll interval
+# Continuous mode with custom interval
 python main.py run -c --interval 600
 
 # Check configuration
@@ -121,8 +139,11 @@ python main.py status
 # View recent stories
 python main.py recent --hours 48
 
-# Analyze specific story
+# Manually analyze a story
 python main.py analyze --title "Story Title" --force
+
+# Debug mode
+python main.py run -v
 ```
 
 ## Data Models
@@ -130,78 +151,105 @@ python main.py analyze --title "Story Title" --force
 ### Story
 ```python
 class Story(BaseModel):
-    title: str
-    description: str
-    pub_date: datetime
-    source_url: str
+    title: str                    # Article headline
+    description: str              # HTML/text from RSS
+    pub_date: datetime            # Publication timestamp (UTC)
+    source_url: str               # RSS feed URL
 
     @property
-    def hash(self) -> str: ...      # 16-char dedup hash
+    def hash(self) -> str:        # 16-char SHA-256 dedup key
     @property
-    def publishers(self) -> list[str]: ...  # Extracted from HTML
+    def publishers(self) -> list[str]:  # Extracted from HTML
 ```
 
 ### ClassificationResult
 ```python
 class ClassificationResult(BaseModel):
-    is_important: bool
-    confidence: float  # 0-1
-    category: ImportanceCategory
-    reasoning: str
+    is_important: bool            # Gate for researcher agent
+    confidence: float             # 0.0 to 1.0
+    category: ImportanceCategory  # Topic category enum
+    reasoning: str                # Explanation
+
+    @classmethod
+    def analyze(cls, category, confidence=0.9, reasoning="")
+    @classmethod
+    def skip(cls, category=OTHER, reasoning="...")
 ```
 
 ### ResearchReport
 ```python
 class ResearchReport(BaseModel):
-    summary: str
-    thought: str
-    key_points: list[str]
-    related_topics: list[str]
+    summary: str                  # Detailed analysis (~600-1000 words)
+    thought: str                  # Source analysis notes
+    key_points: list[str]         # 3-5 bullet points
+    related_topics: list[str]     # Follow-up topics
+
+    @classmethod
+    def empty(cls)                # For error cases
 ```
 
 ## Database Schema
 
 ```sql
+-- Main stories table
 CREATE TABLE stories (
-    hash TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    pub_date INTEGER NOT NULL,
-    processed_at INTEGER NOT NULL,
-    is_important INTEGER DEFAULT 0,
-    summary TEXT,
-    thought TEXT,
-    source_url TEXT
+    hash TEXT PRIMARY KEY,         -- 16-char dedup hash
+    title TEXT NOT NULL,           -- Story headline
+    pub_date INTEGER NOT NULL,     -- Unix timestamp
+    processed_at INTEGER NOT NULL, -- When we processed it
+    is_important INTEGER DEFAULT 0,-- 0=skipped, 1=analyzed
+    summary TEXT,                  -- Analysis summary
+    thought TEXT,                  -- Analysis notes
+    source_url TEXT                -- RSS feed URL
 );
+
+-- Indexes
+CREATE INDEX idx_processed ON stories(processed_at);
+CREATE INDEX idx_important ON stories(is_important);
 ```
 
-## Extending
+## Extending the Pipeline
 
 ### Adding a New Tool
 
 1. Create `tools/new_tool.py`:
 ```python
-async def my_tool(param: str) -> str:
+async def my_tool(query: str) -> MyResult:
     """Tool description for the agent."""
     # Implementation
-    return result
+    return MyResult(...)
 ```
 
 2. Register in `agents/researcher.py`:
 ```python
 @agent.tool
-async def my_tool(ctx: RunContext[ResearchContext], param: str) -> str:
-    return await my_tool_impl(param)
+async def my_tool(ctx: RunContext[ResearchContext], query: str) -> str:
+    """Docstring shown to model - explain when to use this tool."""
+    result = await my_tool_impl(query)
+    return result.summary  # Return string for model
 ```
 
-### Adding a New Feed
+### Adding a New RSS Feed
 
 Edit `config.py`:
 ```python
 DEFAULT_RSS_URLS = [
     # ... existing feeds ...
-    "https://example.com/feed.xml",
+    "https://example.com/feed.xml",  # Your new feed
 ]
 ```
+
+### Implementing Web Search
+
+Edit `tools/search.py` - see the integration guide in the module docstring.
+
+## Error Handling
+
+- **Classifier failures**: Default to `is_important=True` (fail-safe)
+- **Researcher failures**: Return empty report, log error
+- **Feed failures**: Skip feed, continue with others
+- **Database errors**: Log and raise
+- **Notification errors**: Log and continue
 
 ## Development
 
@@ -214,4 +262,31 @@ python -c "from pipeline import Pipeline; print('OK')"
 
 # Run with debug logging
 python main.py run -v
+
+# Check database
+sqlite3 news.db "SELECT COUNT(*) FROM stories"
 ```
+
+## Common Tasks
+
+### Check Pipeline Status
+```bash
+python main.py status
+```
+
+### View Recent Important Stories
+```bash
+python main.py recent --hours 24
+```
+
+### Force Re-analyze a Story
+```bash
+python main.py analyze --title "Story Title" --force
+```
+
+### Clear Old Records
+Records are automatically pruned based on `PRUNE_AFTER_DAYS` (default: 30).
+
+## Git Conventions
+
+- Do not add Claude as a co-author in commit messages

@@ -1,4 +1,18 @@
-"""Notification system for important stories."""
+"""Notification system for important stories.
+
+This module handles all output for analyzed stories:
+- Markdown reports saved to disk
+- Webhook POST notifications
+- JSONL alerts file
+
+All notification methods are async and fail gracefully (errors are logged
+but don't affect other notifications or the pipeline).
+
+Output Formats:
+    Markdown: Full report with metadata and analysis
+    Webhook: JSON payload for integration with external systems
+    JSONL: One JSON object per line for log aggregation
+"""
 
 import asyncio
 import json
@@ -17,10 +31,23 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_filename(title: str, max_length: int = 50) -> str:
-    """Sanitize title for use as filename."""
+    """Sanitize title for use as filename.
+
+    Removes characters that are invalid in filenames and truncates
+    to a reasonable length while preserving word boundaries.
+
+    Args:
+        title: Story title to sanitize
+        max_length: Maximum filename length (before extension)
+
+    Returns:
+        Safe filename string
+    """
+    # Remove invalid filename characters
     s = re.sub(r'[<>:"/\\|?*\n\r\t]', " ", title)
     s = re.sub(r"\s+", " ", s).strip()
 
+    # Truncate at word boundary if too long
     if len(s) > max_length:
         s = s[:max_length]
         last_space = s.rfind(" ")

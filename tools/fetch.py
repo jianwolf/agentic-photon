@@ -1,4 +1,17 @@
-"""Article fetching tool for retrieving full article content."""
+"""Article fetching tool for retrieving full article content.
+
+This module provides the article fetching tool used by the researcher agent.
+It fetches HTML from URLs and extracts readable text content.
+
+Features:
+    - SSL fallback for problematic certificates
+    - HTML-to-text conversion (strips scripts, styles)
+    - Content truncation for large pages
+    - Error handling with informative messages
+
+The extracted text is used by the researcher agent to understand
+the full context of news stories beyond the RSS description.
+"""
 
 import logging
 import re
@@ -12,6 +25,7 @@ import certifi
 
 logger = logging.getLogger(__name__)
 
+# Browser-like User-Agent to avoid blocking
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -20,14 +34,25 @@ USER_AGENT = (
 
 
 class _HTMLTextExtractor(HTMLParser):
-    """Extract text from HTML, skipping script/style tags."""
+    """Extract readable text from HTML, skipping non-content tags.
 
+    Ignores content within script, style, head, meta, and link tags.
+    Accumulates all other text content into a buffer.
+
+    Usage:
+        >>> parser = _HTMLTextExtractor()
+        >>> parser.feed("<p>Hello <script>ignored</script> world</p>")
+        >>> parser.get_text()
+        'Hello  world'
+    """
+
+    # Tags whose content should be completely ignored
     SKIP_TAGS = frozenset({"script", "style", "head", "meta", "link"})
 
     def __init__(self):
         super().__init__()
         self._buffer = StringIO()
-        self._skip_depth = 0
+        self._skip_depth = 0  # Nesting depth within skip tags
 
     def handle_starttag(self, tag, attrs):
         if tag in self.SKIP_TAGS:
@@ -38,10 +63,12 @@ class _HTMLTextExtractor(HTMLParser):
             self._skip_depth -= 1
 
     def handle_data(self, data):
+        # Only capture text when not inside a skip tag
         if self._skip_depth == 0:
             self._buffer.write(data)
 
     def get_text(self) -> str:
+        """Return accumulated text content."""
         return self._buffer.getvalue()
 
 

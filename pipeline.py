@@ -1,4 +1,25 @@
-"""Main pipeline orchestration for news analysis."""
+"""Main pipeline orchestration for news analysis.
+
+This module coordinates the entire news analysis workflow:
+
+Pipeline Flow:
+    1. FETCH: Concurrently fetch all RSS feeds
+    2. DEDUP: Filter out previously-seen stories (by hash)
+    3. CLASSIFY: Run classifier agent on new stories
+    4. SPLIT: Separate important from non-important stories
+    5. ANALYZE: Run researcher agent on important stories
+    6. SAVE: Store all results in database
+    7. NOTIFY: Send reports and alerts for important stories
+
+The Pipeline class manages all components and provides both
+single-run and continuous polling modes.
+
+Usage:
+    >>> config = Config.load()
+    >>> pipeline = Pipeline(config)
+    >>> stats = await pipeline.run_once()
+    >>> pipeline.close()
+"""
 
 import asyncio
 import logging
@@ -21,42 +42,91 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineStats:
-    """Statistics from a pipeline run."""
+    """Statistics from a single pipeline run.
 
-    fetched: int = 0
-    skipped: int = 0
-    classified: int = 0
-    important: int = 0
-    analyzed: int = 0
-    notified: int = 0
-    errors: int = 0
-    duration: float = 0.0
+    Tracks counts at each stage of the pipeline for monitoring
+    and debugging purposes.
+
+    Attributes:
+        fetched: Total stories fetched from feeds
+        skipped: Stories already in database (deduplicated)
+        classified: Stories processed by classifier
+        important: Stories marked important
+        analyzed: Stories processed by researcher
+        notified: Successful notifications sent
+        errors: Count of errors at any stage
+        duration: Total run time in seconds
+    """
+
+    fetched: int = 0      # Stories from RSS feeds
+    skipped: int = 0      # Already seen (dedup)
+    classified: int = 0   # Processed by classifier
+    important: int = 0    # Marked important
+    analyzed: int = 0     # Processed by researcher
+    notified: int = 0     # Notifications sent
+    errors: int = 0       # Errors encountered
+    duration: float = 0.0 # Run time (seconds)
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
         d = asdict(self)
         d["duration"] = round(d["duration"], 2)
         return d
 
 
 class Pipeline:
-    """Async news analysis pipeline using PydanticAI agents."""
+    """Async news analysis pipeline using PydanticAI agents.
+
+    Orchestrates the complete workflow from RSS fetching through
+    analysis and notification. Manages all component lifecycles.
+
+    Components:
+        - Database: SQLite storage for dedup and results
+        - ClassifierAgent: Fast importance classification
+        - ResearcherAgent: Deep analysis with tools
+        - VectorStore: Optional semantic search (if enabled)
+
+    Modes:
+        - run_once(): Single execution
+        - run_continuous(): Polling loop with configurable interval
+    """
 
     def __init__(self, config: Config):
+        """Initialize pipeline with all components.
+
+        Args:
+            config: Application configuration
+        """
         self.config = config
         self.db = Database(config.db_path)
         self.classifier = ClassifierAgent(config)
         self.researcher = ResearcherAgent(config)
         self.vector_store: VectorStore | None = None
 
+        # Optional: Vector memory for semantic search
         if config.enable_memory:
             self.vector_store = VectorStore(config.vector_db_path)
 
+        # Optional: Distributed tracing
         if config.enable_logfire:
             from observability.tracing import setup_tracing
             setup_tracing(enabled=True, service_name="photon", token=config.logfire_token)
 
     async def run_once(self) -> PipelineStats:
-        """Execute one pipeline run."""
+        """Execute one complete pipeline run.
+
+        Steps:
+            1. Prune old records from database
+            2. Fetch all RSS feeds concurrently
+            3. Deduplicate against existing stories
+            4. Classify new stories for importance
+            5. Analyze important stories in depth
+            6. Save all results to database
+            7. Send notifications for important stories
+
+        Returns:
+            PipelineStats with counts from each stage
+        """
         run_id = uuid.uuid4().hex[:8]
         start = time.time()
         stats = PipelineStats()

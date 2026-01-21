@@ -1,4 +1,21 @@
-"""Researcher agent for deep analysis of important news stories."""
+"""Researcher agent for deep analysis of important news stories.
+
+This module implements the ResearcherAgent, which performs comprehensive
+analysis on stories that passed the importance classification.
+
+Design Philosophy:
+    - Depth over speed: Takes time to gather context and verify claims
+    - Tool-augmented: Uses web search, article fetching, and history lookup
+    - Structured output: Produces ResearchReport with summary, key points, etc.
+
+Available Tools:
+    - search_web: Search for background info and fact-checking
+    - fetch_source: Retrieve full article content from URLs
+    - get_related_stories: Query database for historical context
+
+The researcher agent is more resource-intensive than the classifier,
+so concurrency is limited (typically 3 parallel analyses).
+"""
 
 import asyncio
 import logging
@@ -17,7 +34,10 @@ from tools.database import query_related_stories
 
 logger = logging.getLogger(__name__)
 
-# System prompts by language
+
+# === System Prompts ===
+# Bilingual prompts instructing the model on analysis methodology.
+
 RESEARCHER_PROMPTS = {
     "zh": """你是一名资深新闻研究员和事实核查专家。
 
@@ -55,30 +75,63 @@ Remain objective and accurate. Avoid speculation.""",
 
 @dataclass
 class ResearchContext:
-    """Context passed to the researcher agent."""
+    """Runtime context passed to the researcher agent.
+
+    Provides configuration and resources needed by the agent's tools.
+
+    Attributes:
+        language: Output language ('zh' or 'en')
+        db_path: Path to SQLite database for history queries
+    """
     language: str = "en"
     db_path: Path = None
 
 
 def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
-    """Create the underlying PydanticAI agent with tools."""
+    """Create the underlying PydanticAI agent with tools.
+
+    The agent is configured with:
+    - Structured output: ResearchReport Pydantic model
+    - Dynamic system prompt: Selected based on language context
+    - Three tools: web search, article fetch, database query
+    - Retry logic: 3 attempts on failure
+
+    Args:
+        model: PydanticAI model string (e.g., 'google-gla:gemini-2.0-flash')
+
+    Returns:
+        Configured PydanticAI Agent with tools
+    """
     agent = Agent(
         model,
         result_type=ResearchReport,
-        system_prompt=RESEARCHER_PROMPTS["en"],
+        system_prompt=RESEARCHER_PROMPTS["en"],  # Default fallback
         retries=3,
     )
 
     @agent.system_prompt
     def dynamic_prompt(ctx: RunContext[ResearchContext]) -> str:
+        """Select system prompt based on language setting."""
         return RESEARCHER_PROMPTS.get(ctx.deps.language, RESEARCHER_PROMPTS["en"])
+
+    # === Tool Definitions ===
+    # These tools are available to the model during analysis.
+    # The model decides when and how to use them based on the task.
 
     @agent.tool
     async def search_web(ctx: RunContext[ResearchContext], query: str) -> str:
-        """Search the web to verify facts or gather background.
+        """Search the web to verify facts or gather background information.
+
+        Use this tool to:
+        - Fact-check claims in the article
+        - Find additional context or background
+        - Discover related news or developments
 
         Args:
-            query: Search query
+            query: Search query (be specific for better results)
+
+        Returns:
+            Formatted search results or error message
         """
         results = await web_search(query)
         return results.summary
@@ -87,8 +140,16 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     async def fetch_source(ctx: RunContext[ResearchContext], url: str) -> str:
         """Fetch full content from an article URL.
 
+        Use this tool to:
+        - Read the complete article text
+        - Extract quotes or specific details
+        - Verify information from the source
+
         Args:
-            url: Article URL
+            url: Full URL of the article to fetch
+
+        Returns:
+            Article title and content preview (or error message)
         """
         content = await fetch_article(url)
         return content.summary
@@ -97,8 +158,16 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     async def get_related_stories(ctx: RunContext[ResearchContext], topic: str) -> str:
         """Query database for previously analyzed stories on a topic.
 
+        Use this tool to:
+        - Find historical context for ongoing stories
+        - Discover related coverage from past analysis
+        - Build timeline of developments
+
         Args:
-            topic: Topic keywords to search
+            topic: Keywords to search (e.g., "OpenAI GPT" or "EU AI regulation")
+
+        Returns:
+            List of related stories with dates and summaries
         """
         if ctx.deps.db_path:
             history = await query_related_stories(topic, ctx.deps.db_path, days=30)
@@ -111,11 +180,31 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
 class ResearcherAgent:
     """Performs deep analysis on important news stories.
 
-    Uses tools for web search, article fetching, and history lookup
-    to produce comprehensive research reports.
+    This agent is the second stage of the analysis pipeline. It receives
+    stories that were classified as important and produces comprehensive
+    research reports with summaries, key points, and context.
+
+    The agent has access to three tools:
+    - search_web: Search for background and fact-checking
+    - fetch_source: Retrieve full article content
+    - get_related_stories: Query historical story database
+
+    The model autonomously decides which tools to use based on the
+    story content and analysis requirements.
+
+    Example:
+        >>> researcher = ResearcherAgent(config)
+        >>> report = await researcher.analyze(story, classification)
+        >>> print(report.summary)
+        >>> print(report.key_points)
     """
 
     def __init__(self, config: Config):
+        """Initialize the researcher agent.
+
+        Args:
+            config: Application configuration with model, language, and db settings
+        """
         self.config = config
         self._agent = _create_agent(config.researcher_model)
         self._context = ResearchContext(

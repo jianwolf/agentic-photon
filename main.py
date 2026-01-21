@@ -3,6 +3,24 @@
 
 This CLI tool monitors RSS feeds, classifies news importance using AI,
 and generates detailed analysis reports for important stories.
+
+Commands:
+    run         Execute the analysis pipeline (once or continuously)
+    status      Show configuration and database statistics
+    recent      Display recent important stories
+    analyze     Manually analyze a specific story
+
+Examples:
+    python main.py run                    # Single run
+    python main.py run -c                 # Continuous polling
+    python main.py run --lang en          # English output
+    python main.py status                 # Show config
+    python main.py recent --hours 48      # Last 48 hours
+    python main.py analyze --title "..." --force
+
+Environment:
+    GEMINI_API_KEY: Required for AI agents
+    See config.py for all configuration options
 """
 
 import argparse
@@ -21,9 +39,12 @@ from database import Database
 def setup_logging(config: Config, verbose: bool = False) -> None:
     """Configure logging with console and file handlers.
 
+    Sets up dual logging to both console (INFO/DEBUG) and daily
+    rotating log files (always DEBUG level).
+
     Args:
-        config: Application configuration
-        verbose: Enable debug logging
+        config: Application configuration (for log directory)
+        verbose: If True, console shows DEBUG level
     """
     level = logging.DEBUG if verbose else logging.INFO
 

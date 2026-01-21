@@ -1,4 +1,29 @@
-"""Database operations for the Photon news analysis pipeline."""
+"""Database operations for the Photon news analysis pipeline.
+
+This module provides SQLite-based storage for processed stories and their
+analysis results. It handles deduplication, pruning, and statistics.
+
+Database Schema:
+    stories table:
+        - hash (TEXT, PK): 16-char dedup hash from Story.hash
+        - title (TEXT): Story title
+        - pub_date (INTEGER): Publication timestamp (Unix epoch)
+        - processed_at (INTEGER): Processing timestamp (Unix epoch)
+        - is_important (INTEGER): 0/1 flag for importance
+        - summary (TEXT): Analysis summary (if important)
+        - thought (TEXT): Analysis notes (if important)
+        - source_url (TEXT): RSS feed URL
+
+    Indexes:
+        - idx_processed: For time-based queries and pruning
+        - idx_important: For filtering important stories
+
+Features:
+    - WAL mode for concurrent read/write access
+    - Automatic schema migration for new columns
+    - Batch operations with deferred commits
+    - Context manager support for auto-cleanup
+"""
 
 import sqlite3
 import time
@@ -11,44 +36,75 @@ from models.research import Analysis
 
 
 class Database:
-    """SQLite database for storing processed stories."""
+    """SQLite database for storing processed stories.
 
+    Provides storage and retrieval for the news analysis pipeline.
+    Stories are deduplicated by their hash and can be queried by
+    recency and importance.
+
+    Example:
+        >>> with Database("news.db") as db:
+        ...     db.save(story, analysis)
+        ...     recent = db.recent(hours=24)
+    """
+
+    # SQL schema for the stories table and indexes
     SCHEMA = """
+    -- Main stories table: one row per processed story
     CREATE TABLE IF NOT EXISTS stories (
-        hash TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        pub_date INTEGER NOT NULL,
-        processed_at INTEGER NOT NULL,
-        is_important INTEGER DEFAULT 0,
-        summary TEXT,
-        thought TEXT,
-        source_url TEXT
+        hash TEXT PRIMARY KEY,           -- 16-char dedup hash
+        title TEXT NOT NULL,             -- Story headline
+        pub_date INTEGER NOT NULL,       -- Publication time (Unix epoch)
+        processed_at INTEGER NOT NULL,   -- When we processed it (Unix epoch)
+        is_important INTEGER DEFAULT 0,  -- 0=skipped, 1=analyzed
+        summary TEXT,                    -- Analysis summary (NULL if not important)
+        thought TEXT,                    -- Analysis notes (NULL if not important)
+        source_url TEXT                  -- RSS feed URL
     );
+
+    -- Index for time-based queries (recent stories, pruning)
     CREATE INDEX IF NOT EXISTS idx_processed ON stories(processed_at);
+
+    -- Index for filtering by importance
     CREATE INDEX IF NOT EXISTS idx_important ON stories(is_important);
     """
 
     def __init__(self, path: Path | str):
-        """Initialize database connection."""
+        """Initialize database connection.
+
+        Creates the database file if it doesn't exist and sets up
+        the schema. Uses WAL mode for better concurrent access.
+
+        Args:
+            path: Path to SQLite database file
+        """
         self.path = Path(path)
         self.conn = sqlite3.connect(str(self.path))
-        self.conn.row_factory = sqlite3.Row
-        # Enable WAL mode for better concurrent access
+        self.conn.row_factory = sqlite3.Row  # Enable dict-like row access
+
+        # WAL mode allows concurrent readers during writes
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
 
     def _init_schema(self) -> None:
-        """Create tables if they don't exist."""
+        """Create tables and indexes if they don't exist.
+
+        Also runs any pending migrations for schema evolution.
+        """
         self.conn.executescript(self.SCHEMA)
         self.conn.commit()
         self._migrate()
 
     def _migrate(self) -> None:
-        """Run any necessary migrations."""
+        """Run schema migrations for backwards compatibility.
+
+        Adds columns that were added in later versions without
+        requiring a database rebuild.
+        """
         cursor = self.conn.execute("PRAGMA table_info(stories)")
         columns = {row["name"] for row in cursor.fetchall()}
 
-        # Add missing columns from schema evolution
+        # Migration: source_url column added after initial release
         if "source_url" not in columns:
             self.conn.execute("ALTER TABLE stories ADD COLUMN source_url TEXT")
             self.conn.commit()

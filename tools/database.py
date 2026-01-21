@@ -1,4 +1,19 @@
-"""Database tool for querying story history."""
+"""Database tool for querying story history.
+
+This module provides the history lookup tool used by the researcher agent.
+It queries previously analyzed stories for context and related coverage.
+
+Query Method:
+    Uses simple keyword matching (LIKE) on title and summary fields.
+    For production use, consider upgrading to:
+    - SQLite FTS5 for full-text search
+    - Vector similarity via the VectorStore module
+
+The tool helps the researcher agent:
+    - Find historical context for ongoing stories
+    - Discover related previous coverage
+    - Build timelines of story development
+"""
 
 import logging
 import sqlite3
@@ -11,7 +26,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StoryHistory:
-    """Results from querying related stories."""
+    """Results from querying related stories.
+
+    Attributes:
+        topic: The search keywords used
+        stories: List of matching story dicts
+        days: Number of days searched
+    """
 
     topic: str
     stories: list[dict] = field(default_factory=list)
@@ -19,7 +40,11 @@ class StoryHistory:
 
     @property
     def summary(self) -> str:
-        """Format as readable summary."""
+        """Format as readable summary for the agent.
+
+        Returns:
+            Human-readable string with story list
+        """
         if not self.stories:
             return f"No related stories found for: {self.topic}"
 

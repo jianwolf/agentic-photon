@@ -1,4 +1,19 @@
-"""Classifier agent for determining news story importance."""
+"""Classifier agent for determining news story importance.
+
+This module implements the ClassifierAgent, which uses a fast AI model to
+quickly determine whether a news story warrants deep analysis.
+
+Design Philosophy:
+    - Speed over depth: Uses a fast model for quick triage
+    - Fail-safe: Defaults to "important" on errors (avoid missing stories)
+    - Concurrent: Batch classification with semaphore-controlled parallelism
+
+The classifier outputs a ClassificationResult with:
+    - is_important: Boolean gate for the researcher agent
+    - category: Topic classification for context
+    - confidence: Model's certainty (0-1)
+    - reasoning: Brief explanation
+"""
 
 import asyncio
 import logging
@@ -12,7 +27,11 @@ from models.classification import ClassificationResult, ImportanceCategory
 
 logger = logging.getLogger(__name__)
 
-# System prompts by language
+
+# === System Prompts ===
+# Bilingual prompts for Chinese (zh) and English (en) output.
+# The prompt instructs the model to classify news importance based on topic.
+
 CLASSIFIER_PROMPTS = {
     "zh": """你是一个新闻分类专家。判断新闻是否重要。
 
@@ -48,34 +67,75 @@ Analyze title and source, output JSON classification.""",
 
 @dataclass
 class ClassifierContext:
-    """Context passed to the classifier agent."""
+    """Runtime context passed to the classifier agent.
+
+    This context is provided as `deps` to the PydanticAI agent and
+    is used to select the appropriate language-specific system prompt.
+
+    Attributes:
+        language: Output language ('zh' or 'en')
+    """
     language: str = "en"
 
 
 def _create_agent(model: str) -> Agent[ClassifierContext, ClassificationResult]:
-    """Create the underlying PydanticAI agent."""
+    """Create the underlying PydanticAI agent for classification.
+
+    The agent uses:
+    - Structured output: ClassificationResult Pydantic model
+    - Dynamic system prompt: Selected based on language context
+    - Retry logic: 3 attempts on failure
+
+    Args:
+        model: PydanticAI model string (e.g., 'google-gla:gemini-2.0-flash')
+
+    Returns:
+        Configured PydanticAI Agent
+    """
     agent = Agent(
         model,
         result_type=ClassificationResult,
-        system_prompt=CLASSIFIER_PROMPTS["en"],
+        system_prompt=CLASSIFIER_PROMPTS["en"],  # Default fallback
         retries=3,
     )
 
     @agent.system_prompt
     def dynamic_prompt(ctx: RunContext[ClassifierContext]) -> str:
+        """Select system prompt based on language setting."""
         return CLASSIFIER_PROMPTS.get(ctx.deps.language, CLASSIFIER_PROMPTS["en"])
 
     return agent
 
 
 class ClassifierAgent:
-    """Classifies news stories by importance.
+    """Classifies news stories by importance using AI.
 
-    Uses a fast model to quickly determine if stories warrant
-    deeper analysis by the researcher agent.
+    This agent is the first stage of the analysis pipeline. It quickly
+    evaluates each story and determines whether it warrants deeper
+    analysis by the researcher agent.
+
+    The agent uses a fast model (typically Gemini Flash) optimized for
+    speed over depth. Stories classified as important proceed to the
+    researcher; others are saved and skipped.
+
+    Error Handling:
+        On classification failure, the agent defaults to marking the story
+        as important (fail-safe). This ensures we don't miss potentially
+        important stories due to transient API errors.
+
+    Example:
+        >>> classifier = ClassifierAgent(config)
+        >>> result = await classifier.classify(story)
+        >>> if result.is_important:
+        ...     # Send to researcher agent
     """
 
     def __init__(self, config: Config):
+        """Initialize the classifier agent.
+
+        Args:
+            config: Application configuration with model and language settings
+        """
         self.config = config
         self._agent = _create_agent(config.classifier_model)
         self._context = ClassifierContext(language=config.language)

@@ -1,4 +1,20 @@
-"""Async RSS feed parsing module."""
+"""Async RSS feed parsing module.
+
+This module handles concurrent fetching and parsing of RSS feeds.
+It converts feed entries into Story objects for pipeline processing.
+
+Features:
+    - Concurrent fetching with connection pooling
+    - SSL certificate handling with fallback
+    - Age-based filtering of old stories
+    - Graceful error handling per feed
+
+Error Handling Strategy:
+    - Individual feed failures don't affect other feeds
+    - SSL errors trigger a retry without verification
+    - Parse errors result in empty story list for that feed
+    - All errors are logged at DEBUG level to avoid noise
+"""
 
 import asyncio
 import logging
@@ -13,6 +29,7 @@ from models.story import Story
 
 logger = logging.getLogger(__name__)
 
+# Browser-like User-Agent to avoid being blocked by some servers
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -21,9 +38,18 @@ USER_AGENT = (
 
 
 def _ssl_context(verify: bool = True) -> ssl.SSLContext:
-    """Create SSL context with optional verification."""
+    """Create SSL context with optional certificate verification.
+
+    Args:
+        verify: If True, verify SSL certificates using certifi bundle.
+                If False, disable verification (for problematic servers).
+
+    Returns:
+        Configured SSL context
+    """
     if verify:
         return ssl.create_default_context(cafile=certifi.where())
+    # Fallback: disable verification for servers with cert issues
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -31,7 +57,19 @@ def _ssl_context(verify: bool = True) -> ssl.SSLContext:
 
 
 def _parse_date(entry: dict) -> datetime | None:
-    """Extract publication date from feed entry."""
+    """Extract publication date from feed entry.
+
+    Tries multiple date fields in order of preference:
+    1. published_parsed - Standard RSS pubDate
+    2. updated_parsed - Atom updated timestamp
+    3. created_parsed - Less common creation date
+
+    Args:
+        entry: Parsed feed entry dictionary
+
+    Returns:
+        Datetime in UTC, or None if no valid date found
+    """
     for field in ("published_parsed", "updated_parsed", "created_parsed"):
         time_tuple = entry.get(field)
         if time_tuple:
@@ -48,7 +86,20 @@ async def _fetch_feed(
     timeout: int,
     verify_ssl: bool = True,
 ) -> str | None:
-    """Fetch feed content from URL."""
+    """Fetch feed content from URL with SSL fallback.
+
+    On SSL certificate errors, automatically retries without verification.
+    This handles servers with expired or self-signed certificates.
+
+    Args:
+        session: aiohttp client session
+        url: Feed URL to fetch
+        timeout: Request timeout in seconds
+        verify_ssl: Whether to verify SSL certificates
+
+    Returns:
+        Feed content as string, or None on any error
+    """
     try:
         async with session.get(
             url,
@@ -61,30 +112,48 @@ async def _fetch_feed(
                 return None
             return await resp.text()
     except aiohttp.ClientSSLError:
+        # Retry without SSL verification on certificate errors
         if verify_ssl:
-            logger.debug(f"Feed {url}: SSL error, retrying")
+            logger.debug(f"Feed {url}: SSL error, retrying without verification")
             return await _fetch_feed(session, url, timeout, verify_ssl=False)
         return None
     except asyncio.TimeoutError:
-        logger.debug(f"Feed {url}: timeout")
+        logger.debug(f"Feed {url}: request timed out after {timeout}s")
         return None
     except Exception as e:
-        logger.debug(f"Feed {url}: {e}")
+        logger.debug(f"Feed {url}: {type(e).__name__}: {e}")
         return None
 
 
 def _parse_feed_content(content: str, source_url: str, max_age_hours: int) -> list[Story]:
-    """Parse feed content into Story objects."""
+    """Parse feed content into Story objects.
+
+    Filters out:
+    - Entries without titles
+    - Entries older than max_age_hours
+
+    Args:
+        content: Raw feed content (XML/RSS/Atom)
+        source_url: URL of the feed (stored in Story.source_url)
+        max_age_hours: Maximum age of stories to include
+
+    Returns:
+        List of Story objects (may be empty)
+    """
     feed = feedparser.parse(content)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     stories = []
 
     for entry in feed.entries:
+        # Skip entries without titles
         title = entry.get("title", "").strip()
         if not title:
             continue
 
+        # Use current time if no publication date found
         pub_date = _parse_date(entry) or datetime.now(timezone.utc)
+
+        # Skip old entries
         if pub_date < cutoff:
             continue
 
@@ -104,7 +173,19 @@ async def _parse_feed(
     max_age_hours: int,
     timeout: int,
 ) -> list[Story]:
-    """Fetch and parse a single feed."""
+    """Fetch and parse a single feed.
+
+    Combines fetching and parsing. Returns empty list on any error.
+
+    Args:
+        session: aiohttp client session
+        url: Feed URL
+        max_age_hours: Maximum story age to include
+        timeout: Request timeout in seconds
+
+    Returns:
+        List of Story objects from the feed
+    """
     content = await _fetch_feed(session, url, timeout)
     if not content:
         return []
@@ -119,21 +200,37 @@ async def fetch_all_feeds(
 ) -> list[Story]:
     """Fetch and parse all RSS feeds concurrently.
 
+    Uses connection pooling to efficiently fetch multiple feeds in parallel.
+    Individual feed failures are logged but don't affect other feeds.
+
     Args:
         urls: Feed URLs to fetch
-        max_age_hours: Max story age to include
-        timeout: Request timeout per feed
-        max_concurrent: Max concurrent requests
+        max_age_hours: Maximum story age to include (older filtered out)
+        timeout: Request timeout per feed in seconds
+        max_concurrent: Maximum concurrent TCP connections
 
     Returns:
-        Combined list of Story objects
+        Combined list of Story objects from all successful feeds
+
+    Example:
+        >>> stories = await fetch_all_feeds(
+        ...     urls=["https://example.com/feed.xml"],
+        ...     max_age_hours=720,
+        ...     timeout=30,
+        ...     max_concurrent=10,
+        ... )
+        >>> len(stories)
+        42
     """
+    # Create connection pool with concurrency limit
     connector = aiohttp.TCPConnector(limit=max_concurrent)
 
     async with aiohttp.ClientSession(connector=connector) as session:
+        # Launch all feed fetches concurrently
         tasks = [_parse_feed(session, url, max_age_hours, timeout) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Aggregate results, tracking errors
     stories = []
     errors = 0
     for i, result in enumerate(results):

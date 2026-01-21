@@ -1,4 +1,29 @@
-"""Tracing and observability using Logfire/OpenTelemetry."""
+"""Tracing and observability using Logfire/OpenTelemetry.
+
+This module provides optional distributed tracing for the pipeline.
+It integrates with Logfire (Pydantic's observability platform) and
+automatically instruments PydanticAI agent calls.
+
+Features:
+    - Automatic PydanticAI instrumentation
+    - Context manager for custom spans
+    - Decorator for function tracing
+    - Pipeline-level statistics tracking
+
+Requirements:
+    pip install logfire
+
+Enable via configuration:
+    ENABLE_LOGFIRE=true
+    LOGFIRE_TOKEN=your-token  # Optional for cloud dashboard
+
+Usage:
+    >>> from observability.tracing import setup_tracing, trace_operation
+    >>> setup_tracing(enabled=True, service_name="photon")
+    >>> with trace_operation("my_operation"):
+    ...     # Your code here
+    ...     pass
+"""
 
 import logging
 from contextlib import contextmanager

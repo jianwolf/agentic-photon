@@ -1,4 +1,24 @@
-"""Vector store for semantic story search using ChromaDB."""
+"""Vector store for semantic story search using ChromaDB.
+
+This module provides optional semantic search capabilities for stories.
+It uses ChromaDB to store embeddings and find similar stories.
+
+Features:
+    - Lazy initialization (ChromaDB loaded only when needed)
+    - Semantic similarity search across story history
+    - Related story discovery by embedding similarity
+    - Persistent storage using DuckDB backend
+
+Requirements:
+    pip install chromadb
+
+Enable via configuration:
+    ENABLE_MEMORY=true
+    VECTOR_DB_PATH=./vectors
+
+The vector store complements the keyword-based database search
+by finding conceptually related stories even without matching keywords.
+"""
 
 import logging
 from dataclasses import dataclass
@@ -11,7 +31,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StoryEmbedding:
-    """A story with its embedding for semantic search."""
+    """A story with its embedding for semantic search.
+
+    Attributes:
+        hash: Story deduplication hash
+        title: Story headline
+        summary: Full summary text (used for embedding)
+        pub_date: Publication timestamp
+        source_url: RSS feed URL
+        embedding: Vector embedding (populated by ChromaDB)
+    """
     hash: str
     title: str
     summary: str
@@ -22,7 +51,13 @@ class StoryEmbedding:
 
 @dataclass
 class SearchResult:
-    """Result from a semantic search."""
+    """Result from a semantic search.
+
+    Attributes:
+        story: The matched story
+        distance: Raw distance from query (lower = more similar)
+        relevance_score: Normalized score 0-1 (higher = more relevant)
+    """
     story: StoryEmbedding
     distance: float
     relevance_score: float
