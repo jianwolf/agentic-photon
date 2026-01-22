@@ -209,7 +209,9 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
         Returns:
             Formatted search results or error message
         """
+        logger.debug("Tool call: search_web | query=%s", query[:80])
         results = await web_search(query)
+        logger.debug("Tool result: search_web | chars=%d", len(results.summary))
         return results.summary
 
     @agent.tool
@@ -227,7 +229,9 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
         Returns:
             Article title and content preview (or error message)
         """
+        logger.debug("Tool call: fetch_source | url=%s", url[:100])
         content = await fetch_article(url)
+        logger.debug("Tool result: fetch_source | chars=%d", len(content.summary))
         return content.summary
 
     @agent.tool
@@ -245,9 +249,12 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
         Returns:
             List of related stories with dates and summaries
         """
+        logger.debug("Tool call: get_related_stories | topic=%s", topic[:80])
         if ctx.deps.db_path:
             history = await query_related_stories(topic, ctx.deps.db_path, days=30)
+            logger.debug("Tool result: get_related_stories | chars=%d", len(history.summary))
             return history.summary
+        logger.debug("Tool result: get_related_stories | no database available")
         return "No story database available."
 
     return agent
@@ -329,12 +336,22 @@ Instructions:
 4. Assess significance and impact"""
 
         try:
+            logger.info("Analysis started | title=%s", story.title[:60])
             result = await self._agent.run(
                 message,
                 deps=self._context,
-                usage_limits=UsageLimits(request_limit=None),
+                usage_limits=UsageLimits(request_limit=15),  # Cap at 15 API requests per story
             )
-            logger.info("Analysis complete | title=%s chars=%d", story.title[:50], len(result.output.summary))
+            # Log token usage
+            usage = result.usage()
+            logger.info(
+                "Analysis complete | title=%s chars=%d requests=%d input_tokens=%d output_tokens=%d",
+                story.title[:50],
+                len(result.output.summary),
+                usage.requests,
+                usage.request_tokens or 0,
+                usage.response_tokens or 0,
+            )
             return result.output
         except Exception as e:
             logger.error("Analysis failed for '%s...': %s", story.title[:50], e, exc_info=True)
@@ -354,16 +371,26 @@ Instructions:
         Returns:
             List of (story, report) tuples
         """
+        total = len(stories)
+        completed = 0
         semaphore = asyncio.Semaphore(max_concurrent)
 
+        logger.info("Batch analysis started | total=%d max_concurrent=%d", total, max_concurrent)
+
         async def analyze_one(
+            index: int,
             story: Story,
             classification: ClassificationResult | None,
         ) -> tuple[Story, ResearchReport]:
+            nonlocal completed
             async with semaphore:
-                return story, await self.analyze(story, classification)
+                logger.info("Processing story %d/%d | title=%s", index + 1, total, story.title[:50])
+                result = await self.analyze(story, classification)
+                completed += 1
+                logger.info("Progress: %d/%d complete (%.0f%%)", completed, total, completed / total * 100)
+                return story, result
 
-        tasks = [analyze_one(s, c) for s, c in stories]
+        tasks = [analyze_one(i, s, c) for i, (s, c) in enumerate(stories)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         output = []
@@ -374,4 +401,5 @@ Instructions:
             else:
                 output.append(result)
 
+        logger.info("Batch analysis complete | total=%d errors=%d", total, sum(1 for r in results if isinstance(r, Exception)))
         return output

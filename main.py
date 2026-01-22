@@ -53,17 +53,19 @@ def cmd_run(args: argparse.Namespace, config: Config) -> int:
     if args.interval:
         config.poll_interval_seconds = args.interval
 
+    max_stories = getattr(args, 'max_stories', 0) or 0
+
     logger = logging.getLogger(__name__)
 
     if args.continuous:
         logger.info("Starting continuous mode...")
         try:
-            asyncio.run(run_continuous(config))
+            asyncio.run(run_continuous(config, max_stories=max_stories))
         except KeyboardInterrupt:
             logger.info("Stopped by user")
         return 0
     else:
-        stats = asyncio.run(run_once(config))
+        stats = asyncio.run(run_once(config, max_stories=max_stories))
         logger.info(f"Run complete: {json.dumps(stats)}")
         return 0
 
@@ -236,6 +238,12 @@ def main() -> int:
         "--interval",
         type=int,
         help="Poll interval in seconds (continuous mode)",
+    )
+    run_parser.add_argument(
+        "--max-stories",
+        type=int,
+        default=0,
+        help="Max important stories to analyze (0 = unlimited, selects latest by date)",
     )
 
     # status command

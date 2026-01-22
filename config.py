@@ -158,9 +158,9 @@ class Config:
     language: str = "zh"  # LANGUAGE - 'zh' (Chinese) or 'en' (English)
 
     # === AI Models ===
-    # PydanticAI format: provider:model (e.g., 'google-gla:gemini-2.0-flash')
-    classifier_model: str = "google-gla:gemini-2.0-flash"  # Fast classification
-    researcher_model: str = "google-gla:gemini-2.0-flash"  # Deep analysis
+    # PydanticAI format: provider:model (e.g., 'google-gla:gemini-3-flash-preview')
+    classifier_model: str = "google-gla:gemini-3-flash-preview"  # Fast classification
+    researcher_model: str = "google-gla:gemini-3-flash-preview"  # Deep analysis
 
     # === Story Filtering ===
     max_age_hours: int = 720  # MAX_AGE_HOURS - Skip stories older than this (30 days)
@@ -207,8 +207,8 @@ class Config:
         return cls(
             gemini_api_key=_env("GEMINI_API_KEY"),
             language=_env("LANGUAGE", "zh"),
-            classifier_model=_env("CLASSIFIER_MODEL", "google-gla:gemini-2.0-flash"),
-            researcher_model=_env("RESEARCHER_MODEL", "google-gla:gemini-2.0-flash"),
+            classifier_model=_env("CLASSIFIER_MODEL", "google-gla:gemini-3-flash-preview"),
+            researcher_model=_env("RESEARCHER_MODEL", "google-gla:gemini-3-flash-preview"),
             max_age_hours=_env_int("MAX_AGE_HOURS", 720),
             db_path=Path(_env("DB_PATH", "news.db")),
             prune_after_days=_env_int("PRUNE_AFTER_DAYS", 30),

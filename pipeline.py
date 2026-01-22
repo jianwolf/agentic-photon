@@ -113,7 +113,7 @@ class Pipeline:
             from observability.tracing import setup_tracing
             setup_tracing(enabled=True, service_name="photon", token=config.logfire_token)
 
-    async def run_once(self) -> PipelineStats:
+    async def run_once(self, max_stories: int = 0) -> PipelineStats:
         """Execute one complete pipeline run.
 
         Steps:
@@ -121,9 +121,13 @@ class Pipeline:
             2. Fetch all RSS feeds concurrently
             3. Deduplicate against existing stories
             4. Classify new stories for importance
-            5. Analyze important stories in depth
+            5. Analyze important stories in depth (limited by max_stories)
             6. Save all results to database
             7. Send notifications for important stories
+
+        Args:
+            max_stories: Maximum important stories to analyze (0 = unlimited).
+                         When limited, selects the latest stories by pub_date.
 
         Returns:
             PipelineStats with counts from each stage
@@ -171,7 +175,17 @@ class Pipeline:
             not_important = [(s, c) for s, c in classified if not c.is_important]
             stats.important = len(important)
 
-            logger.info("Classification complete | important=%d skip=%d", stats.important, len(not_important))
+            # Limit important stories if max_stories is set
+            if max_stories > 0 and len(important) > max_stories:
+                # Sort by pub_date descending (latest first) and take top N
+                important.sort(key=lambda x: x[0].pub_date, reverse=True)
+                skipped_important = important[max_stories:]
+                important = important[:max_stories]
+                # Move skipped important stories to not_important (save without analysis)
+                not_important.extend(skipped_important)
+                logger.info("Limited to %d latest important stories (skipped %d)", max_stories, len(skipped_important))
+
+            logger.info("Classification complete | important=%d skip=%d", len(important), len(not_important))
 
             # Save non-important stories
             for story, _ in not_important:
@@ -227,8 +241,12 @@ class Pipeline:
         clear_context()
         return stats
 
-    async def run_continuous(self) -> None:
-        """Run pipeline continuously with polling."""
+    async def run_continuous(self, max_stories: int = 0) -> None:
+        """Run pipeline continuously with polling.
+
+        Args:
+            max_stories: Maximum important stories to analyze per run (0 = unlimited).
+        """
         run_count = 0
         total_important = 0
         total_errors = 0
@@ -239,7 +257,7 @@ class Pipeline:
             while True:
                 run_count += 1
                 try:
-                    stats = await self.run_once()
+                    stats = await self.run_once(max_stories=max_stories)
                     total_important += stats.important
                     total_errors += stats.errors
                 except Exception as e:
@@ -260,19 +278,29 @@ class Pipeline:
             self.vector_store.persist()
 
 
-async def run_once(config: Config) -> dict[str, Any]:
-    """Run pipeline once and return stats dict."""
+async def run_once(config: Config, max_stories: int = 0) -> dict[str, Any]:
+    """Run pipeline once and return stats dict.
+
+    Args:
+        config: Application configuration
+        max_stories: Maximum important stories to analyze (0 = unlimited)
+    """
     pipeline = Pipeline(config)
     try:
-        return (await pipeline.run_once()).to_dict()
+        return (await pipeline.run_once(max_stories=max_stories)).to_dict()
     finally:
         pipeline.close()
 
 
-async def run_continuous(config: Config) -> None:
-    """Run pipeline continuously."""
+async def run_continuous(config: Config, max_stories: int = 0) -> None:
+    """Run pipeline continuously.
+
+    Args:
+        config: Application configuration
+        max_stories: Maximum important stories to analyze per run (0 = unlimited)
+    """
     pipeline = Pipeline(config)
     try:
-        await pipeline.run_continuous()
+        await pipeline.run_continuous(max_stories=max_stories)
     finally:
         pipeline.close()

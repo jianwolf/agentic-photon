@@ -82,3 +82,5 @@ dmypy.json
 
 # Jupyter
 .ipynb_checkpoints/
+*.db-shm
+*.db-wal

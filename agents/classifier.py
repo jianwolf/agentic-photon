@@ -192,7 +192,15 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
 
         try:
             result = await self._agent.run(message, deps=self._context)
-            logger.debug("Classified: %s... -> %s", story.title[:50], result.output.is_important)
+            usage = result.usage()
+            logger.debug(
+                "Classified: %s... -> %s | requests=%d tokens=%d/%d",
+                story.title[:50],
+                result.output.is_important,
+                usage.requests,
+                usage.request_tokens or 0,
+                usage.response_tokens or 0,
+            )
             return result.output
         except Exception as e:
             logger.error("Classification failed for '%s...': %s", story.title[:50], e, exc_info=True)
@@ -217,11 +225,20 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
         Returns:
             List of (story, classification) tuples
         """
+        total = len(stories)
+        completed = 0
         semaphore = asyncio.Semaphore(max_concurrent)
 
+        logger.info("Batch classification started | total=%d max_concurrent=%d", total, max_concurrent)
+
         async def classify_one(story: Story) -> tuple[Story, ClassificationResult]:
+            nonlocal completed
             async with semaphore:
-                return story, await self.classify(story)
+                result = await self.classify(story)
+                completed += 1
+                if completed % 10 == 0 or completed == total:
+                    logger.info("Classification progress: %d/%d (%.0f%%)", completed, total, completed / total * 100)
+                return story, result
 
         tasks = [classify_one(s) for s in stories]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -241,4 +258,5 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
             else:
                 output.append(result)
 
+        logger.info("Batch classification complete | total=%d errors=%d", total, sum(1 for r in results if isinstance(r, Exception)))
         return output
