@@ -7,10 +7,11 @@ Features:
     - Lazy initialization (ChromaDB loaded only when needed)
     - Semantic similarity search across story history
     - Related story discovery by embedding similarity
-    - Persistent storage using DuckDB backend
+    - Persistent storage using SQLite backend (ChromaDB 0.4.0+)
+    - Auto-persistence (no manual persist() calls needed)
 
 Requirements:
-    pip install chromadb
+    pip install chromadb>=0.4.0
 
 Enable via configuration:
     ENABLE_MEMORY=true
@@ -18,6 +19,11 @@ Enable via configuration:
 
 The vector store complements the keyword-based database search
 by finding conceptually related stories even without matching keywords.
+
+API Changes (ChromaDB 0.4.0+):
+    - Uses PersistentClient instead of Client with Settings
+    - Removed deprecated duckdb+parquet backend (now uses SQLite)
+    - Auto-persists on every write (persist() is no-op)
 """
 
 import logging
@@ -86,6 +92,9 @@ class VectorStore:
     def _ensure_initialized(self) -> bool:
         """Lazily initialize ChromaDB.
 
+        Uses the modern PersistentClient API (ChromaDB 0.4.0+).
+        Falls back gracefully if ChromaDB is not installed.
+
         Returns:
             True if initialization succeeded, False otherwise
         """
@@ -98,11 +107,12 @@ class VectorStore:
 
             self.path.mkdir(parents=True, exist_ok=True)
 
-            self._client = chromadb.Client(Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=str(self.path),
-                anonymized_telemetry=False
-            ))
+            # Use modern PersistentClient API (ChromaDB 0.4.0+)
+            # This replaces the deprecated Client(Settings(chroma_db_impl="duckdb+parquet"))
+            self._client = chromadb.PersistentClient(
+                path=str(self.path),
+                settings=Settings(anonymized_telemetry=False),
+            )
 
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
@@ -114,7 +124,7 @@ class VectorStore:
             return True
 
         except ImportError:
-            logger.warning("ChromaDB not installed. Vector search disabled.")
+            logger.warning("ChromaDB not installed. Run: pip install chromadb>=0.4.0")
             return False
         except Exception as e:
             logger.error("Failed to initialize vector store: %s", e, exc_info=True)
@@ -275,10 +285,11 @@ class VectorStore:
             return 0
 
     def persist(self) -> None:
-        """Persist the vector store to disk."""
-        if self._client and self._initialized:
-            try:
-                self._client.persist()
-                logger.debug("Vector store persisted")
-            except Exception as e:
-                logger.error("Failed to persist vector store: %s", e, exc_info=True)
+        """Persist the vector store to disk.
+
+        Note: ChromaDB 0.4.0+ auto-persists on every write operation.
+        This method is kept for API compatibility but is effectively a no-op.
+        """
+        # ChromaDB 0.4.0+ uses SQLite backend with auto-persistence
+        # Manual persist() is no longer needed or supported
+        logger.debug("Vector store auto-persists (ChromaDB 0.4.0+)")
