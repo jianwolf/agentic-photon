@@ -36,6 +36,7 @@ from agents.classifier import ClassifierAgent
 from agents.researcher import ResearcherAgent
 from notifications import notify_batch
 from memory.vector_store import VectorStore
+from observability.logging import set_run_context, clear_context
 
 logger = logging.getLogger(__name__)
 
@@ -128,16 +129,17 @@ class Pipeline:
             PipelineStats with counts from each stage
         """
         run_id = uuid.uuid4().hex[:8]
+        set_run_context(run_id)
         start = time.time()
         stats = PipelineStats()
 
-        logger.info(f"Pipeline started | run={run_id} feeds={len(self.config.rss_urls)}")
+        logger.info("Pipeline started | feeds=%d", len(self.config.rss_urls))
 
         try:
             # Prune old records
             pruned = self.db.prune(self.config.prune_after_days)
             if pruned:
-                logger.debug(f"Pruned {pruned} old records")
+                logger.debug("Pruned old records | count=%d", pruned)
 
             # Fetch stories
             stories = await fetch_all_feeds(
@@ -152,7 +154,7 @@ class Pipeline:
             new_stories = [s for s in stories if s.hash not in seen]
             stats.skipped = stats.fetched - len(new_stories)
 
-            logger.info(f"Fetched {stats.fetched} stories, {len(new_stories)} new")
+            logger.info("Fetch complete | total=%d new=%d", stats.fetched, len(new_stories))
 
             if not new_stories:
                 stats.duration = time.time() - start
@@ -169,7 +171,7 @@ class Pipeline:
             not_important = [(s, c) for s, c in classified if not c.is_important]
             stats.important = len(important)
 
-            logger.info(f"Classified: {stats.important} important, {len(not_important)} skip")
+            logger.info("Classification complete | important=%d skip=%d", stats.important, len(not_important))
 
             # Save non-important stories
             for story, _ in not_important:
@@ -196,11 +198,11 @@ class Pipeline:
                             )
 
                         to_notify.append((story, analysis))
-                        logger.info(f"IMPORTANT [{story.hash}] {story.title[:60]}")
+                        logger.info("Story analyzed | hash=%s title=%s", story.hash, story.title[:60])
                     else:
                         stats.errors += 1
                         self.db.save(story, Analysis.empty(), commit=False)
-                        logger.warning(f"Empty analysis [{story.hash}]")
+                        logger.warning("Empty analysis result | hash=%s", story.hash)
 
                 # Send notifications
                 if to_notify:
@@ -219,9 +221,10 @@ class Pipeline:
 
         stats.duration = time.time() - start
         logger.info(
-            f"Pipeline done in {stats.duration:.1f}s | "
-            f"important={stats.important} notified={stats.notified} errors={stats.errors}"
+            "Pipeline done | duration=%.1fs important=%d notified=%d errors=%d",
+            stats.duration, stats.important, stats.notified, stats.errors
         )
+        clear_context()
         return stats
 
     async def run_continuous(self) -> None:
@@ -230,7 +233,7 @@ class Pipeline:
         total_important = 0
         total_errors = 0
 
-        logger.info(f"Starting continuous mode | interval={self.config.poll_interval_seconds}s")
+        logger.info("Starting continuous mode | interval=%ds", self.config.poll_interval_seconds)
 
         try:
             while True:
@@ -240,14 +243,14 @@ class Pipeline:
                     total_important += stats.important
                     total_errors += stats.errors
                 except Exception as e:
-                    logger.error(f"Run #{run_count} failed: {e}")
+                    logger.error("Run failed | run=%d error=%s", run_count, e, exc_info=True)
                     total_errors += 1
 
-                logger.info(f"Run #{run_count} | total: important={total_important} errors={total_errors}")
+                logger.info("Run complete | run=%d total_important=%d total_errors=%d", run_count, total_important, total_errors)
                 await asyncio.sleep(self.config.poll_interval_seconds)
 
         except asyncio.CancelledError:
-            logger.info(f"Stopped after {run_count} runs | important={total_important} errors={total_errors}")
+            logger.info("Pipeline stopped | runs=%d total_important=%d total_errors=%d", run_count, total_important, total_errors)
             raise
 
     def close(self) -> None:

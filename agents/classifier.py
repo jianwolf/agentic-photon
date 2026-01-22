@@ -156,10 +156,10 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
 
         try:
             result = await self._agent.run(message, deps=self._context)
-            logger.debug(f"Classified: {story.title[:50]}... -> {result.data.is_important}")
+            logger.debug("Classified: %s... -> %s", story.title[:50], result.data.is_important)
             return result.data
         except Exception as e:
-            logger.error(f"Classification failed for '{story.title[:50]}...': {e}")
+            logger.error("Classification failed for '%s...': %s", story.title[:50], e, exc_info=True)
             # Default to important on error to avoid missing stories
             return ClassificationResult.analyze(
                 category=ImportanceCategory.OTHER,
@@ -193,7 +193,7 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
         output = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(f"Batch error: {result}")
+                logger.error("Batch classification error for story %d: %s", i, result, exc_info=result)
                 output.append((
                     stories[i],
                     ClassificationResult.analyze(

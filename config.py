@@ -29,6 +29,12 @@ Environment Variables:
     Optional Features:
         ENABLE_MEMORY: Enable ChromaDB vector store for semantic search
         ENABLE_LOGFIRE: Enable Logfire/OpenTelemetry tracing
+
+    Logging:
+        LOG_LEVEL: Logging verbosity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        LOG_BACKUP_COUNT: Number of rotated log files to keep
+        LOG_MAX_BYTES: Max log file size in bytes (0 = time-based rotation)
+        LOG_FORMAT: Log format ('text' or 'json' for structured logging)
 """
 
 import os
@@ -179,6 +185,12 @@ class Config:
     log_dir: Path = field(default_factory=lambda: Path("log"))  # LOG_DIR
     reports_dir: Path = field(default_factory=lambda: Path("reports"))  # REPORTS_DIR
 
+    # === Logging Configuration ===
+    log_level: str = "INFO"  # LOG_LEVEL - DEBUG, INFO, WARNING, ERROR
+    log_backup_count: int = 30  # LOG_BACKUP_COUNT - Number of rotated logs to keep
+    log_max_bytes: int = 0  # LOG_MAX_BYTES - Max file size (0 = time-based rotation)
+    log_format: str = "text"  # LOG_FORMAT - 'text' or 'json' for structured logging
+
     # === Optional: Vector Memory ===
     # Requires: pip install chromadb
     enable_memory: bool = False  # ENABLE_MEMORY - Enable semantic story search
@@ -212,6 +224,10 @@ class Config:
             vector_db_path=Path(_env("VECTOR_DB_PATH", "vectors")),
             enable_logfire=_env_bool("ENABLE_LOGFIRE", False),
             logfire_token=_env("LOGFIRE_TOKEN"),
+            log_level=_env("LOG_LEVEL", "INFO").upper(),
+            log_backup_count=_env_int("LOG_BACKUP_COUNT", 30),
+            log_max_bytes=_env_int("LOG_MAX_BYTES", 0),
+            log_format=_env("LOG_FORMAT", "text").lower(),
         )
 
     def validate(self) -> str | None:
@@ -238,4 +254,10 @@ class Config:
             return "POLL_INTERVAL_SECONDS must be positive"
         if self.max_workers <= 0:
             return "MAX_WORKERS must be positive"
+        if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            return f"Invalid LOG_LEVEL '{self.log_level}' - must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
+        if self.log_format not in ("text", "json"):
+            return f"Invalid LOG_FORMAT '{self.log_format}' - must be 'text' or 'json'"
+        if self.log_backup_count < 0:
+            return "LOG_BACKUP_COUNT must be non-negative"
         return None

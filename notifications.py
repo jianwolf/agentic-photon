@@ -95,11 +95,11 @@ async def save_markdown_report(
             ])
 
         filepath.write_text("\n".join(lines), encoding="utf-8")
-        logger.info(f"Report saved: {filepath.name}")
+        logger.info("Report saved | file=%s", filepath.name)
         return filepath
 
     except Exception as e:
-        logger.error(f"Report save failed: {e}")
+        logger.error("Report save failed: %s", e, exc_info=True)
         return None
 
 
@@ -124,12 +124,12 @@ async def send_webhook(story: Story, analysis: Analysis, url: str) -> bool:
                 url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 if resp.status < 300:
-                    logger.debug(f"Webhook sent: {story.title[:40]}")
+                    logger.debug("Webhook sent | title=%s", story.title[:40])
                     return True
-                logger.warning(f"Webhook {resp.status}: {story.title[:40]}")
+                logger.warning("Webhook failed | status=%d title=%s", resp.status, story.title[:40])
                 return False
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error("Webhook error: %s", e, exc_info=True)
         return False
 
 
@@ -153,7 +153,7 @@ async def append_alerts_file(story: Story, analysis: Analysis, filepath: str) ->
             f.write(json.dumps(alert, ensure_ascii=False) + "\n")
         return True
     except Exception as e:
-        logger.error(f"Alerts file error: {e}")
+        logger.error("Alerts file error: %s", e, exc_info=True)
         return False
 
 

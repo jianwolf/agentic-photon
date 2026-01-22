@@ -254,10 +254,10 @@ Instructions:
 
         try:
             result = await self._agent.run(message, deps=self._context)
-            logger.info(f"Analyzed: {story.title[:50]}... ({len(result.data.summary)} chars)")
+            logger.info("Analysis complete | title=%s chars=%d", story.title[:50], len(result.data.summary))
             return result.data
         except Exception as e:
-            logger.error(f"Analysis failed for '{story.title[:50]}...': {e}")
+            logger.error("Analysis failed for '%s...': %s", story.title[:50], e, exc_info=True)
             return ResearchReport.empty()
 
     async def analyze_batch(
@@ -289,7 +289,7 @@ Instructions:
         output = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(f"Batch analysis error: {result}")
+                logger.error("Batch analysis error for story %d: %s", i, result, exc_info=result)
                 output.append((stories[i][0], ResearchReport.empty()))
             else:
                 output.append(result)

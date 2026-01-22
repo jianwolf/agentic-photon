@@ -79,7 +79,7 @@ async def query_related_stories(
     Returns:
         StoryHistory with matching stories
     """
-    logger.debug(f"Querying related stories: {topic}")
+    logger.debug("Querying related stories: %s", topic)
 
     try:
         conn = sqlite3.connect(str(db_path))
@@ -137,5 +137,5 @@ async def query_related_stories(
         return StoryHistory(topic=topic, stories=stories, days=days)
 
     except Exception as e:
-        logger.error(f"Database query error: {e}")
+        logger.error("Database query error: %s", e, exc_info=True)
         return StoryHistory(topic=topic, stories=[], days=days)

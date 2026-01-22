@@ -131,7 +131,7 @@ async def fetch_article(
     Returns:
         ArticleContent with extracted text or error
     """
-    logger.debug(f"Fetching: {url}")
+    logger.debug("Fetching article: %s", url)
 
     async def fetch_with_ssl(session: aiohttp.ClientSession, verify: bool) -> str:
         async with session.get(
@@ -151,7 +151,7 @@ async def fetch_article(
             try:
                 html = await fetch_with_ssl(session, verify=True)
             except aiohttp.ClientSSLError:
-                logger.debug(f"SSL error, retrying without verification: {url}")
+                logger.debug("SSL error, retrying without verification: %s", url)
                 html = await fetch_with_ssl(session, verify=False)
 
         # Extract title
@@ -168,5 +168,5 @@ async def fetch_article(
     except aiohttp.ClientResponseError as e:
         return ArticleContent(url=url, title="", content="", success=False, error=f"HTTP {e.status}")
     except Exception as e:
-        logger.error(f"Fetch error for {url}: {e}")
+        logger.error("Fetch error for %s: %s", url, e, exc_info=True)
         return ArticleContent(url=url, title="", content="", success=False, error=str(e))

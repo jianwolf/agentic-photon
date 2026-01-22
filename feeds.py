@@ -108,20 +108,24 @@ async def _fetch_feed(
             ssl=_ssl_context(verify_ssl),
         ) as resp:
             if resp.status != 200:
-                logger.debug(f"Feed {url}: HTTP {resp.status}")
+                if resp.status >= 500:
+                    logger.warning("Feed %s: server error HTTP %d", url, resp.status)
+                else:
+                    logger.debug("Feed %s: HTTP %d", url, resp.status)
                 return None
             return await resp.text()
-    except aiohttp.ClientSSLError:
+    except aiohttp.ClientSSLError as e:
         # Retry without SSL verification on certificate errors
         if verify_ssl:
-            logger.debug(f"Feed {url}: SSL error, retrying without verification")
+            logger.debug("Feed %s: SSL error, retrying without verification", url)
             return await _fetch_feed(session, url, timeout, verify_ssl=False)
+        logger.warning("Feed %s: SSL verification failed after retry: %s", url, e)
         return None
     except asyncio.TimeoutError:
-        logger.debug(f"Feed {url}: request timed out after {timeout}s")
+        logger.warning("Feed %s: request timed out after %ds", url, timeout)
         return None
     except Exception as e:
-        logger.debug(f"Feed {url}: {type(e).__name__}: {e}")
+        logger.warning("Feed %s: %s: %s", url, type(e).__name__, e)
         return None
 
 
@@ -235,10 +239,10 @@ async def fetch_all_feeds(
     errors = 0
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.debug(f"Feed error {urls[i]}: {result}")
+            logger.warning("Feed error %s: %s", urls[i], result)
             errors += 1
         elif result:
             stories.extend(result)
 
-    logger.info(f"Feeds: {len(stories)} stories from {len(urls)} feeds ({errors} errors)")
+    logger.info("Feeds fetched | stories=%d feeds=%d errors=%d", len(stories), len(urls), errors)
     return stories

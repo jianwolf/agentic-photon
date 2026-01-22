@@ -32,6 +32,8 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Callable, Generator
 
+from observability.logging import set_trace_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,13 +86,13 @@ def setup_tracing(
         logfire.instrument_pydantic_ai()
 
         _context._logfire_configured = True
-        logger.info(f"Logfire tracing enabled for service: {service_name}")
+        logger.info("Logfire tracing enabled for service: %s", service_name)
 
     except ImportError:
         logger.warning("Logfire not installed. Tracing disabled.")
         _context.enabled = False
     except Exception as e:
-        logger.error(f"Failed to configure Logfire: {e}")
+        logger.error("Failed to configure Logfire: %s", e, exc_info=True)
         _context.enabled = False
 
     return _context
@@ -118,6 +120,14 @@ def trace_operation(
             import logfire
 
             with logfire.span(name, **span_attrs) as span:
+                # Inject trace ID into logging context
+                try:
+                    trace_id = span.context.trace_id if hasattr(span, 'context') else None
+                    if trace_id:
+                        set_trace_context(format(trace_id, '032x'))
+                except Exception:
+                    pass  # Don't fail if trace context extraction fails
+
                 result_attrs: dict[str, Any] = {}
                 yield result_attrs
 
@@ -131,7 +141,7 @@ def trace_operation(
 
     finally:
         duration = (datetime.now() - start_time).total_seconds()
-        logger.debug(f"Operation '{name}' completed in {duration:.2f}s")
+        logger.debug("Operation '%s' completed in %.2fs", name, duration)
 
 
 def trace_function(name: str | None = None) -> Callable:
@@ -210,7 +220,7 @@ class PipelineTracer:
         """
         self.stats["feeds_fetched"] = feed_count
         self.stats["stories_fetched"] = story_count
-        logger.info(f"Fetched {story_count} stories from {feed_count} feeds")
+        logger.info("Fetched %d stories from %d feeds", story_count, feed_count)
 
     def record_dedup(self, before: int, after: int) -> None:
         """Record deduplication statistics.
@@ -222,7 +232,7 @@ class PipelineTracer:
         self.stats["stories_before_dedup"] = before
         self.stats["stories_after_dedup"] = after
         self.stats["stories_deduplicated"] = before - after
-        logger.info(f"Dedup: {before} -> {after} stories ({before - after} removed)")
+        logger.info("Dedup: %d -> %d stories (%d removed)", before, after, before - after)
 
     def record_classification(
         self,
@@ -240,7 +250,7 @@ class PipelineTracer:
         self.stats["stories_classified"] = total
         self.stats["stories_important"] = important
         self.stats["stories_not_important"] = not_important
-        logger.info(f"Classified: {important} important, {not_important} not important")
+        logger.info("Classified: %d important, %d not important", important, not_important)
 
     def record_analysis(self, analyzed: int, errors: int) -> None:
         """Record analysis statistics.
@@ -251,7 +261,7 @@ class PipelineTracer:
         """
         self.stats["stories_analyzed"] = analyzed
         self.stats["analysis_errors"] = errors
-        logger.info(f"Analyzed: {analyzed} stories, {errors} errors")
+        logger.info("Analyzed: %d stories, %d errors", analyzed, errors)
 
     def record_notification(self, notified: int, failed: int) -> None:
         """Record notification statistics.
@@ -262,7 +272,7 @@ class PipelineTracer:
         """
         self.stats["notifications_sent"] = notified
         self.stats["notifications_failed"] = failed
-        logger.info(f"Notified: {notified} sent, {failed} failed")
+        logger.info("Notified: %d sent, %d failed", notified, failed)
 
     def get_summary(self) -> dict[str, Any]:
         """Get the complete run summary.

@@ -110,14 +110,14 @@ class VectorStore:
             )
 
             self._initialized = True
-            logger.info(f"Vector store initialized at {self.path}")
+            logger.info("Vector store initialized at %s", self.path)
             return True
 
         except ImportError:
             logger.warning("ChromaDB not installed. Vector search disabled.")
             return False
         except Exception as e:
-            logger.error(f"Failed to initialize vector store: {e}")
+            logger.error("Failed to initialize vector store: %s", e, exc_info=True)
             return False
 
     async def add_story(
@@ -157,11 +157,11 @@ class VectorStore:
                 }]
             )
 
-            logger.debug(f"Added story to vector store: {story_hash}")
+            logger.debug("Added story to vector store: %s", story_hash)
             return True
 
         except Exception as e:
-            logger.error(f"Failed to add story to vector store: {e}")
+            logger.error("Failed to add story to vector store: %s", e, exc_info=True)
             return False
 
     async def search(
@@ -219,7 +219,7 @@ class VectorStore:
             return search_results
 
         except Exception as e:
-            logger.error(f"Vector search error: {e}")
+            logger.error("Vector search error: %s", e, exc_info=True)
             return []
 
     async def find_related(
@@ -257,7 +257,7 @@ class VectorStore:
             return [r for r in results if r.story.hash != story_hash][:n_results]
 
         except Exception as e:
-            logger.error(f"Find related error: {e}")
+            logger.error("Find related error: %s", e, exc_info=True)
             return []
 
     def count(self) -> int:
@@ -281,4 +281,4 @@ class VectorStore:
                 self._client.persist()
                 logger.debug("Vector store persisted")
             except Exception as e:
-                logger.error(f"Failed to persist vector store: {e}")
+                logger.error("Failed to persist vector store: %s", e, exc_info=True)

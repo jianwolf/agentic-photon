@@ -25,6 +25,7 @@ Features:
     - Context manager support for auto-cleanup
 """
 
+import logging
 import sqlite3
 import time
 from datetime import datetime, timedelta
@@ -33,6 +34,8 @@ from typing import Any
 
 from models.story import Story
 from models.research import Analysis
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -85,6 +88,7 @@ class Database:
         # WAL mode allows concurrent readers during writes
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
+        logger.debug("Database initialized | path=%s", self.path)
 
     def _init_schema(self) -> None:
         """Create tables and indexes if they don't exist.
@@ -108,6 +112,7 @@ class Database:
         if "source_url" not in columns:
             self.conn.execute("ALTER TABLE stories ADD COLUMN source_url TEXT")
             self.conn.commit()
+            logger.info("Database migrated | added column=source_url")
 
     def seen_hashes(self, hashes: set[str]) -> set[str]:
         """Check which hashes already exist in the database.
@@ -158,6 +163,7 @@ class Database:
         )
         if commit:
             self.conn.commit()
+        logger.debug("Story saved | hash=%s important=%s", story.hash, analysis.is_important)
 
     def commit(self) -> None:
         """Commit pending changes."""
@@ -178,7 +184,10 @@ class Database:
             (cutoff,)
         )
         self.conn.commit()
-        return cursor.rowcount
+        deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info("Database pruned | deleted=%d days=%d", deleted, days)
+        return deleted
 
     def recent(self, hours: int = 24) -> list[dict[str, Any]]:
         """Get important stories from the last N hours.

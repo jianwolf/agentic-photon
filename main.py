@@ -29,63 +29,10 @@ import json
 import logging
 import sys
 from datetime import datetime
-from logging.handlers import TimedRotatingFileHandler
-from pathlib import Path
 
 from config import Config
 from database import Database
-
-
-def setup_logging(config: Config, verbose: bool = False) -> None:
-    """Configure logging with console and file handlers.
-
-    Sets up dual logging to both console (INFO/DEBUG) and daily
-    rotating log files (always DEBUG level).
-
-    Args:
-        config: Application configuration (for log directory)
-        verbose: If True, console shows DEBUG level
-    """
-    level = logging.DEBUG if verbose else logging.INFO
-
-    # Create formatters
-    console_fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S"
-    )
-    file_fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-
-    # Console handler
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(level)
-    console.setFormatter(console_fmt)
-
-    # File handler with daily rotation
-    config.log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = config.log_dir / "photon.log"
-    file_handler = TimedRotatingFileHandler(
-        log_file,
-        when="midnight",
-        interval=1,
-        backupCount=30,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(file_fmt)
-
-    # Configure root logger
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-    root.addHandler(console)
-    root.addHandler(file_handler)
-
-    # Reduce noise from third-party libraries
-    logging.getLogger("aiohttp").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+from observability.logging import setup_logging
 
 
 def cmd_run(args: argparse.Namespace, config: Config) -> int:

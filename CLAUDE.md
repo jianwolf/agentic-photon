@@ -79,6 +79,7 @@ RSS Feeds (17 sources)
 |------|---------|-------------|
 | `memory/vector_store.py` | Semantic search via ChromaDB | `ENABLE_MEMORY=true` |
 | `observability/tracing.py` | Distributed tracing via Logfire | `ENABLE_LOGFIRE=true` |
+| `observability/logging.py` | Enhanced logging with JSON/context | `LOG_FORMAT=json` |
 
 ## Pipeline Flow Details
 
@@ -119,6 +120,12 @@ ALERTS_FILE=                  # Optional JSONL file
 # === Optional Features ===
 ENABLE_MEMORY=false           # ChromaDB vector search
 ENABLE_LOGFIRE=false          # Distributed tracing
+
+# === Logging ===
+LOG_LEVEL=INFO                # DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_FORMAT=text               # 'text' or 'json' for structured logging
+LOG_BACKUP_COUNT=30           # Number of rotated log files to keep
+LOG_MAX_BYTES=0               # Max file size (0 = time-based rotation)
 ```
 
 ## CLI Commands
@@ -250,6 +257,76 @@ Edit `tools/search.py` - see the integration guide in the module docstring.
 - **Feed failures**: Skip feed, continue with others
 - **Database errors**: Log and raise
 - **Notification errors**: Log and continue
+
+## Logging
+
+### Overview
+
+The pipeline uses Python's standard `logging` module with enhanced features:
+- **Dual output**: Console (configurable level) + rotating file (always DEBUG)
+- **Structured logging**: Optional JSON format for log aggregation
+- **Context propagation**: Run ID automatically included in all log messages
+- **Trace correlation**: Integration with Logfire distributed tracing
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `INFO` | Console verbosity: DEBUG, INFO, WARNING, ERROR, CRITICAL |
+| `LOG_FORMAT` | `text` | Output format: `text` (human-readable) or `json` (structured) |
+| `LOG_BACKUP_COUNT` | `30` | Number of rotated log files to keep |
+| `LOG_MAX_BYTES` | `0` | Max file size in bytes (0 = daily time-based rotation) |
+| `LOG_DIR` | `log` | Directory for log files |
+
+### Log Format
+
+**Text format** (default):
+```
+14:23:45 [INFO] [a1b2c3d4] pipeline: Pipeline started | feeds=17
+```
+
+**JSON format** (`LOG_FORMAT=json`):
+```json
+{"timestamp": "2024-01-15T14:23:45Z", "level": "INFO", "logger": "pipeline", "message": "Pipeline started | feeds=17", "run_id": "a1b2c3d4"}
+```
+
+### Log Levels
+
+| Level | Used For |
+|-------|----------|
+| DEBUG | Detailed operations: classifications, fetches, database queries |
+| INFO | Pipeline lifecycle: start, completion, important stories |
+| WARNING | Recoverable issues: feed timeouts, webhook failures, SSL retries |
+| ERROR | Failures with stack traces: API errors, analysis failures |
+
+### Key Log Messages
+
+```bash
+# Pipeline lifecycle
+"Pipeline started | feeds=17"
+"Fetch complete | total=42 new=5"
+"Classification complete | important=3 skip=2"
+"Story analyzed | hash=abc123 title=..."
+"Pipeline done | duration=12.5s important=3 notified=3 errors=0"
+
+# Errors (with stack traces)
+"Classification failed for '...': API error"
+"Analysis failed for '...': timeout"
+"Webhook failed | status=500 title=..."
+```
+
+### Run ID Context
+
+Each pipeline run generates a unique 8-character run ID that's automatically included in all log messages. This enables filtering logs for a specific run:
+
+```bash
+# Filter logs by run ID
+grep "a1b2c3d4" log/photon.log
+```
+
+### Graceful Degradation
+
+If the log directory is not writable, the system falls back to console-only logging with a warning message. This ensures the pipeline continues running even with filesystem issues.
 
 ## Development
 
