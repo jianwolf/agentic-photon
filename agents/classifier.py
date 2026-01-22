@@ -33,35 +33,71 @@ logger = logging.getLogger(__name__)
 # The prompt instructs the model to classify news importance based on topic.
 
 CLASSIFIER_PROMPTS = {
-    "zh": """你是一个新闻分类专家。判断新闻是否重要。
+    "zh": """你是一个专业的新闻价值评估分析师。你的任务是快速、准确地判断新闻的重要性。
 
-**重要**（is_important=true）:
-- 政治、经济、商业、国际关系
-- 政策、法规变化
-- 科技、AI/ML、研究突破
-- 网络安全、数据隐私
+## 判断标准
 
-**不重要**（is_important=false）:
-- 娱乐、体育、生活方式
-- 地方新闻、天气
-- 软文、广告
+**标记为重要 (is_important=true) 的新闻：**
+- 政治与国际关系：政策变化、外交事件、选举、政府人事变动
+- 经济与金融：重大市场波动、央行决策、企业并购、经济指标
+- 科技突破：AI/ML研究进展、重大产品发布、安全漏洞、监管变化
+- 社会影响：影响广泛人群的事件、公共卫生、基础设施
 
-分析标题和来源，输出JSON分类结果。""",
+**标记为不重要 (is_important=false) 的新闻：**
+- 娱乐八卦、体育赛事结果、名人动态
+- 地区性小新闻、天气预报、生活方式内容
+- 软文、广告、产品评测、榜单推荐
 
-    "en": """You are a news classification expert. Determine if news is important.
+## 边界情况处理
+- 科技公司的商业新闻 → 看是否涉及行业格局变化
+- 同一事件的后续报道 → 仅新增实质内容才标记重要
+- 来源可疑的"重大新闻" → 降低置信度但仍标记重要
 
-**Important** (is_important=true):
-- Politics, economics, business, international
-- Policy and regulatory changes
-- Technology, AI/ML, research breakthroughs
-- Cybersecurity, data privacy
+## 置信度校准
+- 0.9-1.0：明确符合或不符合标准
+- 0.7-0.9：基本符合，有轻微模糊性
+- 0.5-0.7：边界案例，需谨慎判断
+- 如有疑虑，宁可标记为重要
 
-**Not important** (is_important=false):
-- Entertainment, sports, lifestyle
-- Local news, weather
-- Sponsored content, ads
+## 输出要求
+分析新闻标题和来源后，输出JSON格式的分类结果，包含：
+- is_important: 布尔值
+- confidence: 0-1之间的数值
+- category: 分类类别
+- reasoning: 1-2句简短解释""",
 
-Analyze title and source, output JSON classification.""",
+    "en": """You are a professional news value assessment analyst. Your task is to quickly and accurately determine news importance.
+
+## Classification Criteria
+
+**Mark as Important (is_important=true):**
+- Politics & International: Policy changes, diplomatic events, elections, government appointments
+- Economics & Finance: Major market movements, central bank decisions, M&A, economic indicators
+- Technology Breakthroughs: AI/ML research advances, major product launches, security vulnerabilities, regulatory changes
+- Societal Impact: Events affecting large populations, public health, infrastructure
+
+**Mark as Not Important (is_important=false):**
+- Entertainment gossip, sports scores, celebrity news
+- Local small news, weather forecasts, lifestyle content
+- Sponsored content, advertisements, product reviews, listicles
+
+## Edge Case Handling
+- Tech company business news → Consider if it changes industry landscape
+- Follow-up reports on same event → Only mark important if substantial new information
+- "Breaking news" from questionable sources → Lower confidence but still mark important
+
+## Confidence Calibration
+- 0.9-1.0: Clearly matches or doesn't match criteria
+- 0.7-0.9: Generally matches with minor ambiguity
+- 0.5-0.7: Edge case requiring careful judgment
+- When in doubt, err toward marking as important
+
+## Output Requirements
+After analyzing the title and source, output JSON classification with:
+- is_important: boolean
+- confidence: number between 0-1
+- category: classification category
+- reasoning: 1-2 sentence brief explanation""",
 }
 
 
