@@ -130,7 +130,7 @@ def _create_agent(model: str) -> Agent[ClassifierContext, ClassificationResult]:
     """
     agent = Agent(
         model,
-        result_type=ClassificationResult,
+        output_type=ClassificationResult,
         system_prompt=CLASSIFIER_PROMPTS["en"],  # Default fallback
         retries=3,
     )
@@ -192,8 +192,8 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
 
         try:
             result = await self._agent.run(message, deps=self._context)
-            logger.debug("Classified: %s... -> %s", story.title[:50], result.data.is_important)
-            return result.data
+            logger.debug("Classified: %s... -> %s", story.title[:50], result.output.is_important)
+            return result.output
         except Exception as e:
             logger.error("Classification failed for '%s...': %s", story.title[:50], e, exc_info=True)
             # Default to important on error to avoid missing stories

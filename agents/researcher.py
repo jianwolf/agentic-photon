@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, UsageLimits
 
 from config import Config
 from models.story import Story
@@ -180,7 +180,7 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     """
     agent = Agent(
         model,
-        result_type=ResearchReport,
+        output_type=ResearchReport,
         system_prompt=RESEARCHER_PROMPTS["en"],  # Default fallback
         retries=3,
     )
@@ -329,9 +329,13 @@ Instructions:
 4. Assess significance and impact"""
 
         try:
-            result = await self._agent.run(message, deps=self._context)
-            logger.info("Analysis complete | title=%s chars=%d", story.title[:50], len(result.data.summary))
-            return result.data
+            result = await self._agent.run(
+                message,
+                deps=self._context,
+                usage_limits=UsageLimits(request_limit=None),
+            )
+            logger.info("Analysis complete | title=%s chars=%d", story.title[:50], len(result.output.summary))
+            return result.output
         except Exception as e:
             logger.error("Analysis failed for '%s...': %s", story.title[:50], e, exc_info=True)
             return ResearchReport.empty()
