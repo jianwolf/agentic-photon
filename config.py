@@ -64,9 +64,17 @@ def _env_int(key: str, default: int) -> int:
 
     Returns:
         Parsed integer or default value
+
+    Raises:
+        ValueError: If value is set but cannot be parsed as integer
     """
     val = os.environ.get(key)
-    return int(val) if val else default
+    if not val:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        raise ValueError(f"Invalid integer value for {key}: '{val}'")
 
 
 def _env_float(key: str, default: float) -> float:
@@ -78,9 +86,17 @@ def _env_float(key: str, default: float) -> float:
 
     Returns:
         Parsed float or default value
+
+    Raises:
+        ValueError: If value is set but cannot be parsed as float
     """
     val = os.environ.get(key)
-    return float(val) if val else default
+    if not val:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        raise ValueError(f"Invalid float value for {key}: '{val}'")
 
 
 def _env_bool(key: str, default: bool = False) -> bool:

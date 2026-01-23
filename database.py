@@ -70,6 +70,9 @@ class Database:
 
     -- Index for filtering by importance
     CREATE INDEX IF NOT EXISTS idx_important ON stories(is_important);
+
+    -- Compound index for common query pattern: recent important stories
+    CREATE INDEX IF NOT EXISTS idx_important_processed ON stories(is_important, processed_at);
     """
 
     def __init__(self, path: Path | str):

@@ -13,6 +13,7 @@ The extracted text is used by the researcher agent to understand
 the full context of news stories beyond the RSS description.
 """
 
+import html
 import logging
 import re
 import ssl
@@ -149,17 +150,17 @@ async def fetch_article(
     try:
         async with aiohttp.ClientSession() as session:
             try:
-                html = await fetch_with_ssl(session, verify=True)
+                html_content = await fetch_with_ssl(session, verify=True)
             except aiohttp.ClientSSLError:
                 logger.debug("SSL error, retrying without verification: %s", url)
-                html = await fetch_with_ssl(session, verify=False)
+                html_content = await fetch_with_ssl(session, verify=False)
 
-        # Extract title
-        match = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
-        title = match.group(1).strip() if match else ""
+        # Extract title and decode HTML entities
+        match = re.search(r"<title[^>]*>([^<]+)</title>", html_content, re.IGNORECASE)
+        title = html.unescape(match.group(1).strip()) if match else ""
 
         # Extract text
-        content = _extract_text(html)
+        content = _extract_text(html_content)
         if len(content) > max_length:
             content = content[:max_length] + "... [truncated]"
 

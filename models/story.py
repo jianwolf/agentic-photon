@@ -111,5 +111,9 @@ class Story(BaseModel):
             matches = re.findall(pattern, self.description, re.IGNORECASE)
             publishers.extend(matches)
 
-        # Return unique publishers
-        return list(set(publishers))
+        # Return unique publishers preserving order
+        return list(dict.fromkeys(publishers))
+
+    def __str__(self) -> str:
+        """Human-readable representation for logging."""
+        return f"Story({self.hash[:8]}..., '{self.title[:50]}...')"

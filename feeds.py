@@ -154,8 +154,11 @@ def _parse_feed_content(content: str, source_url: str, max_age_hours: int) -> li
         if not title:
             continue
 
-        # Use current time if no publication date found
-        pub_date = _parse_date(entry) or datetime.now(timezone.utc)
+        # Use current time if no publication date found (with warning)
+        pub_date = _parse_date(entry)
+        if not pub_date:
+            pub_date = datetime.now(timezone.utc)
+            logger.debug("Feed entry missing date, using current time: %s", title[:50])
 
         # Skip old entries
         if pub_date < cutoff:
@@ -239,10 +242,11 @@ async def fetch_all_feeds(
     errors = 0
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.warning("Feed error %s: %s", urls[i], result)
+            logger.warning("Feed error %s: %s (%s)", urls[i], result, type(result).__name__)
             errors += 1
         elif result:
             stories.extend(result)
+            logger.debug("Feed %s: %d stories", urls[i], len(result))
 
     logger.info("Feeds fetched | stories=%d feeds=%d errors=%d", len(stories), len(urls), errors)
     return stories

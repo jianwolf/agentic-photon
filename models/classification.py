@@ -171,3 +171,8 @@ class ClassificationResult(BaseModel):
             category=category,
             reasoning=reasoning,
         )
+
+    def __str__(self) -> str:
+        """Human-readable representation for logging."""
+        status = "IMPORTANT" if self.is_important else "SKIP"
+        return f"Classification({status}, {self.category.value}, {self.confidence:.2f})"

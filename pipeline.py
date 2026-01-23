@@ -229,8 +229,11 @@ class Pipeline:
             if self.vector_store:
                 self.vector_store.persist()
 
+        except asyncio.CancelledError:
+            logger.info("Pipeline run cancelled")
+            raise
         except Exception as e:
-            logger.error(f"Pipeline error: {e}", exc_info=True)
+            logger.error("Pipeline error | type=%s error=%s", type(e).__name__, e, exc_info=True)
             stats.errors += 1
 
         stats.duration = time.time() - start

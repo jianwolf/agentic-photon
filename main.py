@@ -46,6 +46,7 @@ def cmd_run(args: argparse.Namespace, config: Config) -> int:
         Exit code (0 for success)
     """
     from pipeline import run_once, run_continuous
+    from mlx_server import MLXServerManager
 
     # Override config with CLI arguments
     if args.lang:
@@ -54,20 +55,41 @@ def cmd_run(args: argparse.Namespace, config: Config) -> int:
         config.poll_interval_seconds = args.interval
 
     max_stories = getattr(args, 'max_stories', 0) or 0
+    classifier_model = getattr(args, 'classifier_model', None)
+    mlx_port = getattr(args, 'mlx_port', 8080)
 
     logger = logging.getLogger(__name__)
 
-    if args.continuous:
-        logger.info("Starting continuous mode...")
-        try:
-            asyncio.run(run_continuous(config, max_stories=max_stories))
-        except KeyboardInterrupt:
-            logger.info("Stopped by user")
-        return 0
-    else:
-        stats = asyncio.run(run_once(config, max_stories=max_stories))
-        logger.info(f"Run complete: {json.dumps(stats)}")
-        return 0
+    # Start MLX server for local classifier
+    mlx_server = None
+    if classifier_model:
+        logger.info("Starting MLX server for classifier | model=%s port=%d", classifier_model, mlx_port)
+        mlx_server = MLXServerManager(model=classifier_model, port=mlx_port)
+        mlx_server.start()  # Blocks until server is ready
+        # Update config to use local classifier
+        config.classifier_model = f"openai:local@http://127.0.0.1:{mlx_port}/v1"
+
+    try:
+        if args.continuous:
+            logger.info("Starting continuous mode...")
+            try:
+                asyncio.run(run_continuous(config, max_stories=max_stories))
+            except KeyboardInterrupt:
+                logger.info("Stopped by user (Ctrl+C)")
+            return 0
+        else:
+            stats = asyncio.run(run_once(config, max_stories=max_stories))
+            logger.info("Run complete | stats=%s", json.dumps(stats))
+            return 0
+    except KeyboardInterrupt:
+        logger.info("Stopped by user (Ctrl+C)")
+        return 130  # Standard exit code for SIGINT
+    except Exception as e:
+        logger.error("Pipeline failed | error=%s type=%s", e, type(e).__name__, exc_info=True)
+        return 1
+    finally:
+        if mlx_server:
+            mlx_server.stop()
 
 
 def cmd_status(args: argparse.Namespace, config: Config) -> int:
@@ -245,6 +267,18 @@ def main() -> int:
         default=0,
         help="Max important stories to analyze (0 = unlimited, selects latest by date)",
     )
+    run_parser.add_argument(
+        "--classifier-model",
+        type=str,
+        default="mlx-community/Ministral-3-3B-Instruct-2512",
+        help="Local MLX model for classification (default: Ministral-3B)",
+    )
+    run_parser.add_argument(
+        "--mlx-port",
+        type=int,
+        default=8080,
+        help="Port for local MLX server (default: 8080)",
+    )
 
     # status command
     subparsers.add_parser("status", help="Show configuration and statistics")
@@ -299,17 +333,23 @@ def main() -> int:
             return 1
 
     # Route to command handler
-    if args.command == "run":
-        return cmd_run(args, config)
-    elif args.command == "status":
-        return cmd_status(args, config)
-    elif args.command == "recent":
-        return cmd_recent(args, config)
-    elif args.command == "analyze":
-        if not args.url and not args.title:
+    commands = {
+        "run": cmd_run,
+        "status": cmd_status,
+        "recent": cmd_recent,
+        "analyze": cmd_analyze,
+    }
+
+    if args.command in commands:
+        if args.command == "analyze" and not args.url and not args.title:
             print("Error: --url or --title is required", file=sys.stderr)
             return 1
-        return cmd_analyze(args, config)
+        try:
+            return commands[args.command](args, config)
+        except Exception as e:
+            logging.getLogger(__name__).error("Command failed | cmd=%s error=%s", args.command, e, exc_info=True)
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
     else:
         parser.print_help()
         return 0

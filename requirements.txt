@@ -12,8 +12,15 @@ feedparser>=6.0.0
 # SSL certificates
 certifi>=2023.0.0
 
-# Google Gemini (for legacy compatibility)
+# Google Gemini (for researcher agent)
 google-genai>=1.0.0
+
+# OpenAI client (for local MLX server compatibility)
+openai>=1.0.0
+
+# Local MLX inference (macOS Apple Silicon only)
+# Requires macOS 15.0+
+mlx-lm>=0.20.0; sys_platform == "darwin"
 
 # Observability (optional)
 logfire>=0.50.0

@@ -253,7 +253,13 @@ def setup_logging(
         )
 
     # Reduce noise from third-party libraries
-    for lib in ("aiohttp", "urllib3", "httpx", "httpcore", "asyncio"):
+    noisy_loggers = (
+        "aiohttp", "urllib3", "httpx", "httpcore", "asyncio",
+        "chromadb", "chromadb.telemetry", "chromadb.config",
+        "opentelemetry", "opentelemetry.sdk", "opentelemetry.exporter",
+        "pydantic_ai", "feedparser",
+    )
+    for lib in noisy_loggers:
         logging.getLogger(lib).setLevel(logging.WARNING)
 
     return file_logging_enabled

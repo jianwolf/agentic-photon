@@ -81,47 +81,50 @@ async def query_related_stories(
     """
     logger.debug("Querying related stories: %s", topic)
 
+    if not db_path or not Path(db_path).exists():
+        logger.debug("Database not available: %s", db_path)
+        return StoryHistory(topic=topic, stories=[], days=days)
+
     try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        cutoff_ts = int(cutoff.timestamp())
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            cutoff_ts = int(cutoff.timestamp())
 
-        # Build keyword search
-        keywords = topic.lower().split()
-        if keywords:
-            conditions = " OR ".join(
-                "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)"
-                for _ in keywords
-            )
-            params = [cutoff_ts]
-            for kw in keywords:
-                params.extend([f"%{kw}%", f"%{kw}%"])
-            params.append(limit)
+            # Build keyword search
+            keywords = topic.lower().split()
+            if keywords:
+                conditions = " OR ".join(
+                    "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)"
+                    for _ in keywords
+                )
+                params = [cutoff_ts]
+                for kw in keywords:
+                    params.extend([f"%{kw}%", f"%{kw}%"])
+                params.append(limit)
 
-            query = f"""
-                SELECT hash, title, pub_date, summary, source_url
-                FROM stories
-                WHERE is_important = 1
-                  AND processed_at >= ?
-                  AND ({conditions})
-                ORDER BY processed_at DESC
-                LIMIT ?
-            """
-        else:
-            query = """
-                SELECT hash, title, pub_date, summary, source_url
-                FROM stories
-                WHERE is_important = 1 AND processed_at >= ?
-                ORDER BY processed_at DESC
-                LIMIT ?
-            """
-            params = [cutoff_ts, limit]
+                query = f"""
+                    SELECT hash, title, pub_date, summary, source_url
+                    FROM stories
+                    WHERE is_important = 1
+                      AND processed_at >= ?
+                      AND ({conditions})
+                    ORDER BY processed_at DESC
+                    LIMIT ?
+                """
+            else:
+                query = """
+                    SELECT hash, title, pub_date, summary, source_url
+                    FROM stories
+                    WHERE is_important = 1 AND processed_at >= ?
+                    ORDER BY processed_at DESC
+                    LIMIT ?
+                """
+                params = [cutoff_ts, limit]
 
-        cursor = conn.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor = conn.execute(query, params)
+            rows = cursor.fetchall()
 
         stories = [
             {
@@ -137,5 +140,5 @@ async def query_related_stories(
         return StoryHistory(topic=topic, stories=stories, days=days)
 
     except Exception as e:
-        logger.error("Database query error: %s", e, exc_info=True)
+        logger.error("Database query error: %s | type=%s", e, type(e).__name__, exc_info=True)
         return StoryHistory(topic=topic, stories=[], days=days)

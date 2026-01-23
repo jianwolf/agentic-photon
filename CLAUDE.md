@@ -99,8 +99,8 @@ RSS Feeds (17 sources)
 GEMINI_API_KEY=your-api-key
 
 # === Models (PydanticAI format) ===
-CLASSIFIER_MODEL=google-gla:gemini-2.0-flash
-RESEARCHER_MODEL=google-gla:gemini-2.0-flash
+CLASSIFIER_MODEL=google-gla:gemini-3-flash-preview
+RESEARCHER_MODEL=google-gla:gemini-3-flash-preview
 
 # === Output ===
 LANGUAGE=zh                    # 'zh' (Chinese) or 'en' (English)

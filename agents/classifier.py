@@ -19,7 +19,10 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from openai import AsyncOpenAI
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from config import Config
 from models.story import Story
@@ -114,6 +117,34 @@ class ClassifierContext:
     language: str = "en"
 
 
+def _create_model(model_str: str):
+    """Create the appropriate model based on the model string.
+
+    Supports:
+    - Local MLX models: 'openai:local@http://127.0.0.1:8080/v1'
+    - Remote models: 'google-gla:gemini-3-flash-preview'
+
+    Args:
+        model_str: Model identifier string
+
+    Returns:
+        PydanticAI model instance or model string
+    """
+    if model_str.startswith("openai:local@"):
+        # Local model via OpenAI-compatible server
+        base_url = model_str.split("@", 1)[1]
+        logger.info("Using local MLX model | base_url=%s", base_url)
+        # Local models don't need authentication - use placeholder
+        client = AsyncOpenAI(base_url=base_url, api_key="local-model")
+        return OpenAIModel(
+            model_name="local",  # MLX server ignores this
+            provider=OpenAIProvider(openai_client=client),
+        )
+    else:
+        # Remote model (Gemini, OpenAI, etc.)
+        return model_str
+
+
 def _create_agent(model: str) -> Agent[ClassifierContext, ClassificationResult]:
     """Create the underlying PydanticAI agent for classification.
 
@@ -123,13 +154,16 @@ def _create_agent(model: str) -> Agent[ClassifierContext, ClassificationResult]:
     - Retry logic: 3 attempts on failure
 
     Args:
-        model: PydanticAI model string (e.g., 'google-gla:gemini-2.0-flash')
+        model: PydanticAI model string (e.g., 'google-gla:gemini-3-flash-preview')
+               or local model string (e.g., 'openai:local@http://127.0.0.1:8080/v1')
 
     Returns:
         Configured PydanticAI Agent
     """
+    model_instance = _create_model(model)
+
     agent = Agent(
-        model,
+        model_instance,
         output_type=ClassificationResult,
         system_prompt=CLASSIFIER_PROMPTS["en"],  # Default fallback
         retries=3,
@@ -205,10 +239,11 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
         except Exception as e:
             logger.error("Classification failed for '%s...': %s", story.title[:50], e, exc_info=True)
             # Default to important on error to avoid missing stories
+            # Use low confidence (0.3) to indicate this is a fallback decision
             return ClassificationResult.analyze(
                 category=ImportanceCategory.OTHER,
-                confidence=0.5,
-                reasoning=f"Classification error: {e}",
+                confidence=0.3,
+                reasoning=f"Classification error ({type(e).__name__}): {e}",
             )
 
     async def classify_batch(
@@ -251,8 +286,8 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
                     stories[i],
                     ClassificationResult.analyze(
                         category=ImportanceCategory.OTHER,
-                        confidence=0.5,
-                        reasoning=f"Batch error: {result}",
+                        confidence=0.3,
+                        reasoning=f"Batch error ({type(result).__name__}): {result}",
                     ),
                 ))
             else:

@@ -89,10 +89,10 @@ def setup_tracing(
         logger.info("Logfire tracing enabled for service: %s", service_name)
 
     except ImportError:
-        logger.warning("Logfire not installed. Tracing disabled.")
+        logger.warning("Logfire not installed. Install with: pip install logfire")
         _context.enabled = False
     except Exception as e:
-        logger.error("Failed to configure Logfire: %s", e, exc_info=True)
+        logger.error("Failed to configure Logfire: %s (%s)", e, type(e).__name__, exc_info=True)
         _context.enabled = False
 
     return _context

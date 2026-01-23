@@ -111,6 +111,7 @@ async def send_webhook(story: Story, analysis: Analysis, url: str) -> bool:
     payload = {
         "type": "important_story",
         "timestamp": datetime.now().isoformat(),
+        "hash": story.hash,
         "title": story.title,
         "pub_date": story.pub_date.isoformat(),
         "source_url": story.source_url,
@@ -128,8 +129,11 @@ async def send_webhook(story: Story, analysis: Analysis, url: str) -> bool:
                     return True
                 logger.warning("Webhook failed | status=%d title=%s", resp.status, story.title[:40])
                 return False
+    except asyncio.TimeoutError:
+        logger.warning("Webhook timeout | url=%s title=%s", url[:50], story.title[:40])
+        return False
     except Exception as e:
-        logger.error("Webhook error: %s", e, exc_info=True)
+        logger.error("Webhook error: %s (%s)", e, type(e).__name__, exc_info=True)
         return False
 
 
@@ -140,6 +144,7 @@ async def append_alerts_file(story: Story, analysis: Analysis, filepath: str) ->
 
     alert = {
         "timestamp": datetime.now().isoformat(),
+        "hash": story.hash,
         "title": story.title,
         "source_url": story.source_url,
         "summary": analysis.summary,
@@ -149,11 +154,18 @@ async def append_alerts_file(story: Story, analysis: Analysis, filepath: str) ->
     try:
         path = Path(filepath)
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Warn if file is getting large (> 100MB)
+        if path.exists():
+            size_mb = path.stat().st_size / (1024 * 1024)
+            if size_mb > 100:
+                logger.warning("Alerts file large | size=%.1fMB path=%s", size_mb, filepath)
+
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(alert, ensure_ascii=False) + "\n")
         return True
     except Exception as e:
-        logger.error("Alerts file error: %s", e, exc_info=True)
+        logger.error("Alerts file error: %s (%s)", e, type(e).__name__, exc_info=True)
         return False
 
 

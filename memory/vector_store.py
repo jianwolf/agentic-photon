@@ -103,16 +103,12 @@ class VectorStore:
 
         try:
             import chromadb
-            from chromadb.config import Settings
 
             self.path.mkdir(parents=True, exist_ok=True)
 
             # Use modern PersistentClient API (ChromaDB 0.4.0+)
             # This replaces the deprecated Client(Settings(chroma_db_impl="duckdb+parquet"))
-            self._client = chromadb.PersistentClient(
-                path=str(self.path),
-                settings=Settings(anonymized_telemetry=False),
-            )
+            self._client = chromadb.PersistentClient(path=str(self.path))
 
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
@@ -154,6 +150,12 @@ class VectorStore:
             return False
 
         try:
+            # Check if story already exists to avoid duplicates
+            existing = self._collection.get(ids=[story_hash])
+            if existing["ids"]:
+                logger.debug("Story already in vector store: %s", story_hash)
+                return True
+
             # Combine title and summary for embedding
             text = f"{title}\n\n{summary}"
 
@@ -171,7 +173,7 @@ class VectorStore:
             return True
 
         except Exception as e:
-            logger.error("Failed to add story to vector store: %s", e, exc_info=True)
+            logger.error("Failed to add story to vector store: %s (%s)", e, type(e).__name__, exc_info=True)
             return False
 
     async def search(
@@ -212,11 +214,18 @@ class VectorStore:
                 if relevance < min_relevance:
                     continue
 
+                # Parse pub_date with fallback for malformed dates
+                try:
+                    pub_date = datetime.fromisoformat(metadata.get("pub_date", ""))
+                except (ValueError, TypeError):
+                    pub_date = datetime.now()
+                    logger.debug("Malformed pub_date for story %s, using current time", id)
+
                 story = StoryEmbedding(
                     hash=id,
                     title=metadata.get("title", ""),
                     summary=doc,
-                    pub_date=datetime.fromisoformat(metadata.get("pub_date", "")),
+                    pub_date=pub_date,
                     source_url=metadata.get("source_url", ""),
                 )
 

@@ -158,9 +158,11 @@ class ResearchContext:
     Attributes:
         language: Output language ('zh' or 'en')
         db_path: Path to SQLite database for history queries
+        request_limit: Maximum API requests per story analysis
     """
     language: str = "en"
     db_path: Path = None
+    request_limit: int = 15
 
 
 def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
@@ -173,7 +175,7 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     - Retry logic: 3 attempts on failure
 
     Args:
-        model: PydanticAI model string (e.g., 'google-gla:gemini-2.0-flash')
+        model: PydanticAI model string (e.g., 'google-gla:gemini-3-flash-preview')
 
     Returns:
         Configured PydanticAI Agent with tools
@@ -293,6 +295,7 @@ class ResearcherAgent:
         self._context = ResearchContext(
             language=config.language,
             db_path=config.db_path,
+            request_limit=getattr(config, 'researcher_request_limit', 15),
         )
 
     async def analyze(
@@ -340,7 +343,7 @@ Instructions:
             result = await self._agent.run(
                 message,
                 deps=self._context,
-                usage_limits=UsageLimits(request_limit=15),  # Cap at 15 API requests per story
+                usage_limits=UsageLimits(request_limit=self._context.request_limit),
             )
             # Log token usage
             usage = result.usage()
@@ -354,8 +357,8 @@ Instructions:
             )
             return result.output
         except Exception as e:
-            logger.error("Analysis failed for '%s...': %s", story.title[:50], e, exc_info=True)
-            return ResearchReport.empty()
+            logger.error("Analysis failed for '%s...': %s | type=%s", story.title[:50], e, type(e).__name__, exc_info=True)
+            return ResearchReport.empty(reason=f"Analysis error ({type(e).__name__}): {e}")
 
     async def analyze_batch(
         self,

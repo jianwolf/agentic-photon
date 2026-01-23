@@ -57,15 +57,23 @@ class ResearchReport(BaseModel):
     )
 
     @classmethod
-    def empty(cls) -> "ResearchReport":
+    def empty(cls, reason: str = "") -> "ResearchReport":
         """Create an empty report for error cases.
 
         Used when analysis fails and we need a placeholder report.
 
+        Args:
+            reason: Optional error description to store in thought field
+
         Returns:
-            ResearchReport with empty summary and thought
+            ResearchReport with empty summary and optional error in thought
         """
-        return cls(summary="", thought="")
+        return cls(summary="", thought=reason)
+
+    def __str__(self) -> str:
+        """Human-readable representation for logging."""
+        summary_preview = self.summary[:50] + "..." if len(self.summary) > 50 else self.summary
+        return f"ResearchReport('{summary_preview}')"
 
 
 class Analysis(BaseModel):
