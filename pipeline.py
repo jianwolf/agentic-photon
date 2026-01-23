@@ -112,15 +112,19 @@ async def _gather_story_context(
         query_embedding = None
 
     # Run fetch and RAG in parallel
-    async def fetch_content() -> str:
+    async def fetch_content() -> tuple[str, bool]:
         if story.article_url:
             result = await fetch_article(story.article_url)
             if result.success:
-                return result.content
+                logger.debug(
+                    "Article fetched | url=%s chars=%d",
+                    story.article_url[:50], len(result.content)
+                )
+                return result.content, True
             logger.debug("Article fetch failed for %s: %s", story.article_url[:50], result.error)
-        return ""
+        return "", False
 
-    async def query_rag() -> str:
+    async def query_rag() -> tuple[str, int]:
         try:
             results = db.hybrid_search(
                 query=story.title,
@@ -128,15 +132,25 @@ async def _gather_story_context(
                 limit=5,
                 days=30,
             )
-            return results.format_context()
+            count = len(results.stories)
+            logger.debug(
+                "RAG search complete | query='%s' results=%d",
+                story.title[:40], count
+            )
+            return results.format_context(), count
         except Exception as e:
             logger.warning("Hybrid RAG search failed: %s", e)
-            return "No related stories found in database."
+            return "No related stories found in database.", 0
 
     # Execute in parallel
-    article_content, related_stories = await asyncio.gather(
+    (article_content, article_ok), (related_stories, rag_count) = await asyncio.gather(
         fetch_content(),
         query_rag(),
+    )
+
+    logger.debug(
+        "Context gathered | title='%s' article=%s rag_results=%d",
+        story.title[:40], "yes" if article_ok else "no", rag_count
     )
 
     return StoryContext(

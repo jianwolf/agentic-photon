@@ -260,7 +260,8 @@ def setup_logging(
         "aiohttp", "urllib3", "httpx", "httpcore", "asyncio",
         "chromadb", "chromadb.telemetry", "chromadb.config",
         "opentelemetry", "opentelemetry.sdk", "opentelemetry.exporter",
-        "pydantic_ai", "feedparser",
+        "pydantic_ai", "feedparser", "filelock",
+        "huggingface_hub.utils._http",
     )
     for lib in noisy_loggers:
         logging.getLogger(lib).setLevel(logging.WARNING)

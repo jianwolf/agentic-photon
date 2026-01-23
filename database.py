@@ -436,6 +436,21 @@ class Database:
         """
         cutoff = int((datetime.now() - timedelta(days=days)).timestamp())
 
+        # Escape query for FTS5 syntax:
+        # - Quote each term to prevent special char interpretation
+        # - Remove characters that break FTS5 even when quoted
+        escaped_terms = []
+        for term in query.split():
+            # Remove problematic chars and quote the term
+            clean_term = ''.join(c for c in term if c.isalnum() or c in '-_')
+            if clean_term:
+                escaped_terms.append(f'"{clean_term}"')
+
+        if not escaped_terms:
+            return []
+
+        fts_query = ' '.join(escaped_terms)
+
         # FTS5 match query with BM25 scoring
         cursor = self.conn.execute(
             """
@@ -447,7 +462,7 @@ class Database:
             ORDER BY score
             LIMIT ?
             """,
-            (query, cutoff, limit)
+            (fts_query, cutoff, limit)
         )
         # Note: BM25 returns negative scores (lower is better), so we negate
         return [(row["hash"], -row["score"]) for row in cursor.fetchall()]
