@@ -6,7 +6,7 @@ An intelligent news analysis pipeline powered by PydanticAI agents. Monitors RSS
 
 - **Agent-Based Architecture**: Separate classifier and researcher agents with structured outputs
 - **Async Pipeline**: Concurrent feed fetching and processing with aiohttp
-- **Smart Classification**: Fast importance classification using Gemini Flash
+- **Local Classification**: Fast importance classification using local MLX model (Ministral-3B) on Apple Silicon
 - **Deep Analysis**: Research agent with tools for web search, article fetching, and history lookup
 - **Flexible Output**: Markdown reports, webhooks, and JSONL alerts
 - **Bilingual Support**: Chinese (zh) and English (en) output
@@ -49,6 +49,8 @@ python main.py run -c --interval 600
 | `python main.py run` | Execute pipeline once |
 | `python main.py run -c` | Run continuously with polling |
 | `python main.py run --lang en` | Output in English |
+| `python main.py run --max-stories 5` | Limit to 5 most recent important stories |
+| `python main.py run --classifier-model MODEL` | Use custom MLX model for classification |
 | `python main.py status` | Show configuration and database stats |
 | `python main.py recent --hours 48` | Display recent important stories |
 | `python main.py analyze --title "..." --force` | Manually analyze a story |
@@ -61,7 +63,7 @@ All settings via environment variables:
 |----------|---------|-------------|
 | `GEMINI_API_KEY` | **required** | Google Gemini API key |
 | `LANGUAGE` | `zh` | Output language (`zh` or `en`) |
-| `CLASSIFIER_MODEL` | Local MLX model | Model for classification (default: Ministral-3B via mlx-lm) |
+| `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for classification (overridden by `--classifier-model` CLI arg) |
 | `RESEARCHER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for analysis |
 | `MAX_AGE_HOURS` | `720` | Max story age (30 days) |
 | `POLL_INTERVAL_SECONDS` | `300` | Polling interval (5 min) |
@@ -71,6 +73,9 @@ All settings via environment variables:
 | `ALERTS_FILE` | | Optional JSONL alerts file |
 | `ENABLE_MEMORY` | `false` | Enable ChromaDB vector store |
 | `ENABLE_LOGFIRE` | `false` | Enable Logfire tracing |
+| `GOOGLE_API_KEY` | | Google Custom Search API key (enables web search) |
+| `GOOGLE_CSE_ID` | | Google Custom Search Engine ID |
+| `SERPAPI_KEY` | | SerpAPI key (alternative search backend) |
 
 ## Architecture
 
@@ -113,20 +118,43 @@ agentic-photon/
 │   ├── classification.py   # Classification result
 │   └── research.py         # Research report
 ├── tools/                  # Agent tools
-│   ├── search.py           # Web search (placeholder)
+│   ├── search.py           # Web search (Google CSE or SerpAPI)
 │   ├── fetch.py            # Article fetcher
 │   └── database.py         # History queries
 ├── memory/                 # Optional features
 │   └── vector_store.py     # ChromaDB semantic search
 ├── observability/
+│   ├── logging.py          # Enhanced logging with JSON/context
 │   └── tracing.py          # Logfire integration
 ├── config.py               # Configuration management
 ├── database.py             # SQLite operations
 ├── feeds.py                # RSS fetching
+├── mlx_server.py           # Local MLX model server manager
 ├── notifications.py        # Reports and alerts
 ├── pipeline.py             # Main orchestration
 └── main.py                 # CLI entry point
 ```
+
+## Local MLX Classification (Apple Silicon)
+
+By default, the pipeline uses a local MLX model (Ministral-3B) for classification, which runs entirely on-device using Apple Silicon. This reduces API costs and latency.
+
+```bash
+# Default: uses Ministral-3B-Instruct
+python main.py run
+
+# Custom MLX model
+python main.py run --classifier-model mlx-community/Qwen2.5-3B-Instruct
+
+# Custom port for MLX server
+python main.py run --mlx-port 8081
+```
+
+Requirements:
+- macOS 15.0+ with Apple Silicon (M1/M2/M3)
+- mlx-lm package: `pip install mlx-lm`
+
+The first run will download the model (~2GB). The MLX server starts automatically and shuts down when the pipeline exits.
 
 ## Optional Features
 

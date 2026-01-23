@@ -44,17 +44,18 @@ RSS Feeds (17 sources)
 | File | Purpose | Key Functions |
 |------|---------|---------------|
 | `main.py` | CLI entry point | `main()`, `cmd_run()`, `cmd_status()` |
-| `pipeline.py` | Main orchestration | `Pipeline.run_once()`, `Pipeline.run_continuous()` |
+| `pipeline.py` | Main orchestration | `run_once()`, `run_continuous()` |
 | `config.py` | Configuration | `Config.load()`, `Config.validate()` |
 | `database.py` | SQLite storage | `Database.save()`, `Database.seen_hashes()` |
 | `feeds.py` | RSS fetching | `fetch_all_feeds()` |
 | `notifications.py` | Output | `save_markdown_report()`, `notify_batch()` |
+| `mlx_server.py` | Local model server | `MLXServerManager.start()`, `MLXServerManager.stop()` |
 
 ### Agents
 
 | File | Class | Description |
 |------|-------|-------------|
-| `agents/classifier.py` | `ClassifierAgent` | Fast importance classification using Gemini Flash |
+| `agents/classifier.py` | `ClassifierAgent` | Fast importance classification (local MLX or Gemini) |
 | `agents/researcher.py` | `ResearcherAgent` | Deep analysis with web search, fetch, and history tools |
 
 ### Models
@@ -69,7 +70,7 @@ RSS Feeds (17 sources)
 
 | File | Function | Status |
 |------|----------|--------|
-| `tools/search.py` | `web_search()` | Placeholder - returns empty results |
+| `tools/search.py` | `web_search()` | Optional - requires Google CSE or SerpAPI keys |
 | `tools/fetch.py` | `fetch_article()` | Active - fetches and parses HTML |
 | `tools/database.py` | `query_related_stories()` | Active - keyword search on history |
 
@@ -99,7 +100,9 @@ RSS Feeds (17 sources)
 GEMINI_API_KEY=your-api-key
 
 # === Models (PydanticAI format) ===
-# CLASSIFIER_MODEL uses local MLX model by default (Ministral-3B)
+# CLASSIFIER_MODEL defaults to Gemini but can be overridden via --classifier-model CLI arg
+# to use a local MLX model (e.g., Ministral-3B)
+CLASSIFIER_MODEL=google-gla:gemini-3-flash-preview
 RESEARCHER_MODEL=google-gla:gemini-3-flash-preview
 
 # === Output ===
@@ -116,6 +119,12 @@ MAX_WORKERS=8                 # Concurrent operations
 # === Notifications ===
 NOTIFICATION_WEBHOOK_URL=     # Optional webhook
 ALERTS_FILE=                  # Optional JSONL file
+
+# === Optional: Web Search ===
+# Enable one of these backends for web search capability
+GOOGLE_API_KEY=               # Google Custom Search API key
+GOOGLE_CSE_ID=                # Google Custom Search Engine ID
+SERPAPI_KEY=                  # Or use SerpAPI instead
 
 # === Optional Features ===
 ENABLE_MEMORY=false           # ChromaDB vector search
@@ -136,6 +145,15 @@ python main.py run
 
 # Run with English output
 python main.py run --lang en
+
+# Limit to N most recent important stories
+python main.py run --max-stories 5
+
+# Use custom local MLX model for classification
+python main.py run --classifier-model mlx-community/Qwen2.5-3B-Instruct
+
+# Use custom MLX server port
+python main.py run --mlx-port 8081
 
 # Continuous mode with custom interval
 python main.py run -c --interval 600
@@ -246,9 +264,46 @@ DEFAULT_RSS_URLS = [
 ]
 ```
 
-### Implementing Web Search
+### Enabling Web Search
 
-Edit `tools/search.py` - see the integration guide in the module docstring.
+Web search is disabled by default. To enable it, configure one of these backends:
+
+**Option 1: Google Custom Search**
+```bash
+export GOOGLE_API_KEY=your-api-key
+export GOOGLE_CSE_ID=your-search-engine-id
+```
+
+**Option 2: SerpAPI**
+```bash
+export SERPAPI_KEY=your-serpapi-key
+```
+
+The search tool (`tools/search.py`) will automatically detect which backend is configured.
+
+## Local MLX Classification
+
+The classifier supports local MLX models on Apple Silicon for cost-effective classification:
+
+```bash
+# Use local Ministral-3B model (default)
+python main.py run --classifier-model mlx-community/Ministral-3-3B-Instruct-2512
+
+# Custom port for MLX server
+python main.py run --mlx-port 8081
+```
+
+**Architecture:**
+1. `main.py` starts `MLXServerManager` which launches `mlx_lm.server` subprocess
+2. Server exposes OpenAI-compatible API at `http://127.0.0.1:{port}/v1`
+3. `ClassifierAgent` uses direct OpenAI API calls (not pydantic-ai) for compatibility
+4. Server auto-shuts down when pipeline exits
+
+**Requirements:**
+- macOS 15.0+ with Apple Silicon (M1/M2/M3)
+- `pip install mlx-lm`
+
+**Note:** Local models don't support system messages or `tool_choice`, so the classifier uses a single user message with embedded instructions.
 
 ## Error Handling
 
