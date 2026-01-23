@@ -23,6 +23,7 @@ Example:
     >>> print(content.summary)
 """
 
+from tools.utils import create_ssl_context, USER_AGENT
 from tools.search import web_search, SearchResults
 from tools.fetch import fetch_article, ArticleContent
 from tools.database import query_related_stories, StoryHistory
@@ -34,4 +35,6 @@ __all__ = [
     "ArticleContent",
     "query_related_stories",
     "StoryHistory",
+    "create_ssl_context",
+    "USER_AGENT",
 ]

@@ -268,4 +268,6 @@ class Config:
             return f"Invalid LOG_FORMAT '{self.log_format}' - must be 'text' or 'json'"
         if self.log_backup_count < 0:
             return "LOG_BACKUP_COUNT must be non-negative"
+        if self.log_max_bytes < 0:
+            return "LOG_MAX_BYTES must be non-negative"
         return None

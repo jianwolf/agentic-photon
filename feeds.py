@@ -18,42 +18,15 @@ Error Handling Strategy:
 
 import asyncio
 import logging
-import ssl
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
-import certifi
 import feedparser
 
 from models.story import Story
+from tools.utils import create_ssl_context, USER_AGENT
 
 logger = logging.getLogger(__name__)
-
-# Browser-like User-Agent to avoid being blocked by some servers
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
-
-
-def _ssl_context(verify: bool = True) -> ssl.SSLContext:
-    """Create SSL context with optional certificate verification.
-
-    Args:
-        verify: If True, verify SSL certificates using certifi bundle.
-                If False, disable verification (for problematic servers).
-
-    Returns:
-        Configured SSL context
-    """
-    if verify:
-        return ssl.create_default_context(cafile=certifi.where())
-    # Fallback: disable verification for servers with cert issues
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
 
 
 def _parse_date(entry: dict) -> datetime | None:
@@ -105,7 +78,7 @@ async def _fetch_feed(
             url,
             timeout=aiohttp.ClientTimeout(total=timeout),
             headers={"User-Agent": USER_AGENT},
-            ssl=_ssl_context(verify_ssl),
+            ssl=create_ssl_context(verify_ssl),
         ) as resp:
             if resp.status != 200:
                 if resp.status >= 500:

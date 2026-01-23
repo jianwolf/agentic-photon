@@ -19,7 +19,10 @@ import sys
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler, RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from config import Config
 
 # Context variable for run ID propagation
 run_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("run_id", default="-")
@@ -158,7 +161,7 @@ class TextFormatter(logging.Formatter):
 
 
 def setup_logging(
-    config: Any,
+    config: "Config",  # Use string for forward reference to avoid circular import
     verbose: bool = False,
 ) -> bool:
     """Configure logging with console and file handlers.

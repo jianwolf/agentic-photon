@@ -20,6 +20,15 @@ import unicodedata
 
 from pydantic import BaseModel, Field
 
+# Pre-compiled regex patterns for performance
+_PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+_PUBLISHER_PATTERNS = [
+    re.compile(r'via\s+<a[^>]*>([^<]+)</a>', re.IGNORECASE),
+    re.compile(r'from\s+<a[^>]*>([^<]+)</a>', re.IGNORECASE),
+    re.compile(r'by\s+<a[^>]*>([^<]+)</a>', re.IGNORECASE),
+]
+
 
 class Story(BaseModel):
     """A news story fetched from an RSS feed.
@@ -71,8 +80,8 @@ class Story(BaseModel):
         """
         # Normalize: lowercase, Unicode normalization, remove punctuation
         normalized = unicodedata.normalize("NFKC", self.title.lower())
-        normalized = re.sub(r"[^\w\s]", "", normalized)
-        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = _PUNCTUATION_PATTERN.sub("", normalized)
+        normalized = _WHITESPACE_PATTERN.sub(" ", normalized).strip()
 
         # Use hour granularity (not minute/second) for publication time
         hour_str = self.pub_date.strftime("%Y-%m-%d-%H")
@@ -100,16 +109,9 @@ class Story(BaseModel):
         if not self.description:
             return []
 
-        # Patterns for common aggregator formats
-        patterns = [
-            r'via\s+<a[^>]*>([^<]+)</a>',   # "via <a>Name</a>"
-            r'from\s+<a[^>]*>([^<]+)</a>',  # "from <a>Name</a>"
-            r'by\s+<a[^>]*>([^<]+)</a>',    # "by <a>Name</a>"
-        ]
-
         publishers = []
-        for pattern in patterns:
-            matches = re.findall(pattern, self.description, re.IGNORECASE)
+        for pattern in _PUBLISHER_PATTERNS:
+            matches = pattern.findall(self.description)
             publishers.extend(matches)
 
         # Return unique publishers preserving order

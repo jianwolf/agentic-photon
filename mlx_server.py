@@ -42,6 +42,13 @@ class MLXServerManager:
         >>> server.stop()
     """
 
+    model: str
+    port: int
+    host: str
+    startup_timeout: int
+    _process: subprocess.Popen | None
+    _base_url: str
+
     def __init__(
         self,
         model: str,

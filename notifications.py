@@ -70,12 +70,15 @@ async def save_markdown_report(
         filename = f"{timestamp}_{_sanitize_filename(story.title)}.md"
         filepath = reports_dir / filename
 
+        pub_date_str = story.pub_date.strftime('%Y-%m-%d %H:%M')
+        analyzed_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
         lines = [
             f"# {story.title}",
             "",
-            f"**Published:** {story.pub_date.strftime('%Y-%m-%d %H:%M')}",
+            f"**Published:** {pub_date_str}",
             f"**Source:** {story.source_url}",
-            f"**Analyzed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"**Analyzed:** {analyzed_str}",
             "",
             "---",
             "",

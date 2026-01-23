@@ -16,6 +16,7 @@ The classifier outputs a ClassificationResult with:
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 
@@ -277,7 +278,6 @@ JSON:"""
                 content = content[4:]
         content = content.strip()
 
-        import json
         data = json.loads(content)
         return ClassificationResult(
             is_important=data.get("is_important", True),

@@ -34,7 +34,6 @@ Features:
 
 import logging
 import sqlite3
-import struct
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -221,6 +220,9 @@ class Database:
         VALUES (NEW.rowid, NEW.hash, NEW.title, NEW.summary);
     END;
     """
+
+    path: Path
+    conn: sqlite3.Connection
 
     def __init__(self, path: Path | str):
         """Initialize database connection.

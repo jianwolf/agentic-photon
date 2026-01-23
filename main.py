@@ -113,7 +113,7 @@ def cmd_status(args: argparse.Namespace, config: Config) -> int:
             "feeds": len(config.rss_urls),
             "max_age_hours": config.max_age_hours,
             "poll_interval": config.poll_interval_seconds,
-            "enable_memory": config.enable_memory,
+            "embedded_stories": db_stats["embedded"],
             "enable_logfire": config.enable_logfire,
         },
         "database": {
@@ -179,7 +179,8 @@ def cmd_analyze(args: argparse.Namespace, config: Config) -> int:
     from datetime import timezone
     from models.story import Story
     from agents.classifier import ClassifierAgent
-    from agents.researcher import ResearcherAgent
+    from agents.researcher import ResearcherAgent, StoryContext
+    from tools.fetch import fetch_article
 
     async def analyze_story():
         # Create a story from the input
@@ -188,6 +189,7 @@ def cmd_analyze(args: argparse.Namespace, config: Config) -> int:
             description=args.description or "",
             pub_date=datetime.now(timezone.utc),
             source_url=args.url or "manual",
+            article_url=args.url or "",
         )
 
         # Override language if specified
@@ -198,7 +200,7 @@ def cmd_analyze(args: argparse.Namespace, config: Config) -> int:
         classifier = ClassifierAgent(config)
         classification = await classifier.classify(story)
 
-        print(f"\n=== Classification ===")
+        print("\n=== Classification ===")
         print(f"Important: {classification.is_important}")
         print(f"Category: {classification.category.value}")
         print(f"Confidence: {classification.confidence:.2f}")
@@ -206,19 +208,33 @@ def cmd_analyze(args: argparse.Namespace, config: Config) -> int:
             print(f"Reasoning: {classification.reasoning}")
 
         if classification.is_important or args.force:
-            # Analyze
-            researcher = ResearcherAgent(config)
-            report = await researcher.analyze(story, classification)
+            # Fetch article content if URL provided
+            article_content = ""
+            if args.url:
+                result = await fetch_article(args.url)
+                if result.success:
+                    article_content = result.content
 
-            print(f"\n=== Analysis ===")
+            # Build context and analyze
+            story_context = StoryContext(
+                story=story,
+                classification=classification,
+                article_content=article_content,
+                related_stories="",
+            )
+
+            researcher = ResearcherAgent(config)
+            report = await researcher.analyze(story_context)
+
+            print("\n=== Analysis ===")
             print(f"\n{report.summary}")
 
             if report.thought:
-                print(f"\n--- Notes ---")
+                print("\n--- Notes ---")
                 print(report.thought)
 
             if report.key_points:
-                print(f"\n--- Key Points ---")
+                print("\n--- Key Points ---")
                 for point in report.key_points:
                     print(f"• {point}")
 

@@ -16,22 +16,15 @@ the full context of news stories beyond the RSS description.
 import html
 import logging
 import re
-import ssl
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import StringIO
 
 import aiohttp
-import certifi
+
+from tools.utils import create_ssl_context, USER_AGENT
 
 logger = logging.getLogger(__name__)
-
-# Browser-like User-Agent to avoid blocking
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -88,16 +81,6 @@ def _extract_text(html: str) -> str:
     return text.strip()
 
 
-def _ssl_context(verify: bool = True) -> ssl.SSLContext:
-    """Create SSL context."""
-    if verify:
-        return ssl.create_default_context(cafile=certifi.where())
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
 @dataclass
 class ArticleContent:
     """Fetched article content."""
@@ -139,7 +122,7 @@ async def fetch_article(
             url,
             timeout=aiohttp.ClientTimeout(total=timeout),
             headers={"User-Agent": USER_AGENT},
-            ssl=_ssl_context(verify),
+            ssl=create_ssl_context(verify),
         ) as resp:
             if resp.status != 200:
                 raise aiohttp.ClientResponseError(

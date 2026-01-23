@@ -33,6 +33,10 @@ from models.research import ResearchReport
 
 logger = logging.getLogger(__name__)
 
+# Maximum characters of article content to include in prompt
+MAX_ARTICLE_CONTENT_CHARS = 8000
+MAX_DESCRIPTION_CHARS = 2000
+
 
 # === System Prompts ===
 # Bilingual prompts instructing the model on analysis methodology.
@@ -246,12 +250,15 @@ def _build_user_message(ctx: StoryContext) -> str:
 
     # Build article content section
     if ctx.article_content:
-        article_section = f"""## Full Article Content
-{ctx.article_content[:8000]}
-{"... [truncated]" if len(ctx.article_content) > 8000 else ""}"""
+        content = ctx.article_content[:MAX_ARTICLE_CONTENT_CHARS]
+        truncated = "... [truncated]" if len(ctx.article_content) > MAX_ARTICLE_CONTENT_CHARS else ""
+        article_section = f"## Full Article Content\n{content}{truncated}"
     else:
-        article_section = """## Full Article Content
-(Article content could not be fetched. Analyze based on the description and use web search for verification.)"""
+        article_section = (
+            "## Full Article Content\n"
+            "(Article content could not be fetched. Analyze based on the "
+            "description and use web search for verification.)"
+        )
 
     # Build related stories section
     if ctx.related_stories and ctx.related_stories != "No related stories found in database.":
@@ -270,7 +277,7 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
 {classification_context}
 
 ## RSS Description
-{story.description[:2000] if story.description else "No description available"}
+{story.description[:MAX_DESCRIPTION_CHARS] if story.description else "No description available"}
 
 {article_section}
 
