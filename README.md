@@ -77,34 +77,54 @@ All settings via environment variables:
 | `GOOGLE_CSE_ID` | | Google Custom Search Engine ID |
 | `SERPAPI_KEY` | | SerpAPI key (alternative search backend) |
 
-## Architecture
+## Architecture (v2 - Grounded)
 
 ```
 RSS Feeds (17 sources)
        │
        ▼
-  Async Fetch ──► Dedup ──► Classifier Agent
+  Async Fetch ──► Dedup ──► Classifier (Local LLM)
                                │
                  ┌─────────────┴─────────────┐
                  │                           │
             Important                   Not Important
                  │                           │
                  ▼                           ▼
-        Researcher Agent              Save & Skip
-                 │
-    ┌────────────┼────────────┐
-    │            │            │
- Search     Fetch URL    Query DB
-    │            │            │
-    └────────────┼────────────┘
+    ┌────────────┴────────────┐         Save & Skip
+    │                         │
+ URL Fetch              Hybrid RAG
+ (deterministic)     (BM25 + Vector)
+    │                         │
+    └────────────┬────────────┘
                  │
                  ▼
-          Research Report
+    Researcher (Gemini + Google Search Grounding)
+          Single API call per story
                  │
-    ┌────────────┼────────────┐
-    │            │            │
- Markdown    Webhook      JSONL
+                 ▼
+       Save + Embedding → Markdown/Webhook/JSONL
 ```
+
+### Hybrid RAG Design
+
+The system uses **hybrid retrieval** combining BM25 and vector search:
+
+| Component | Implementation | Purpose |
+|-----------|----------------|---------|
+| **BM25** | SQLite FTS5 | Keyword matching on title/summary |
+| **Vector** | BGE-small-en-v1.5 (384-dim) | Semantic similarity |
+| **Fusion** | Reciprocal Rank Fusion (RRF) | Combine rankings |
+
+**Why Exact NN (not ANN)?**
+
+Vector search uses exact nearest neighbor (brute-force cosine similarity) rather than approximate nearest neighbor (HNSW, IVF, etc.):
+
+- **Scale**: ~300-1500 vectors (30 days × 10-50 important stories/day)
+- **Speed**: <1ms for 1000 vectors — fast enough
+- **Accuracy**: 100% recall (no approximation loss)
+- **Simplicity**: Zero dependencies (no FAISS, Annoy, sqlite-vec)
+
+For this scale, exact NN is the right choice. ANN adds complexity without meaningful benefit until you have 10K+ vectors.
 
 ## Project Structure
 

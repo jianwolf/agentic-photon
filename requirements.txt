@@ -22,11 +22,12 @@ openai>=1.0.0
 # Requires macOS 15.0+
 mlx-lm>=0.20.0; sys_platform == "darwin"
 
+# Embeddings for hybrid RAG (BM25 + Vector search)
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+
 # Observability (optional)
 logfire>=0.50.0
-
-# Vector memory (optional)
-chromadb>=0.4.0
 
 # Development
 pytest>=7.0.0

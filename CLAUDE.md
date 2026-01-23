@@ -8,26 +8,29 @@ Agentic Photon is a PydanticAI-powered news analysis pipeline that:
 3. Performs deep analysis on important stories using a researcher agent
 4. Generates markdown reports and sends notifications
 
-## Architecture
+## Architecture (v2 - Grounded)
 
 ```
 RSS Feeds (17 sources)
        │
        ▼
-  Async Fetch ──► Dedup ──► Classifier Agent
+  Async Fetch ──► Dedup ──► Classifier (Local LLM)
                                │
                  ┌─────────────┴─────────────┐
                  │                           │
             Important                   Not Important
                  │                           │
                  ▼                           ▼
-        Researcher Agent              Save & Skip
+    ┌────────────┴────────────┐         Save & Skip
+    │                         │
+ URL Fetch              Hybrid RAG
+ (deterministic)     (BM25 + Vector)
+    │                         │
+    └────────────┬────────────┘
                  │
-    ┌────────────┼────────────┐
-    │            │            │
- Search     Fetch URL    Query DB
-    │            │            │
-    └────────────┼────────────┘
+                 ▼
+    Researcher (Gemini + Google Search Grounding)
+          Single API call per story
                  │
                  ▼
           Research Report
@@ -35,7 +38,18 @@ RSS Feeds (17 sources)
     ┌────────────┼────────────┐
     │            │            │
  Markdown    Webhook      JSONL
+                 │
+                 ▼
+       Save + Embedding (for future RAG)
 ```
+
+### Key Design Decisions
+
+1. **Classifier**: Local LLM (MLX) for cost efficiency
+2. **Context Gathering**: Deterministic, parallel (URL fetch + hybrid RAG)
+3. **Researcher**: Gemini with Google Search grounding (no custom tools)
+4. **Single API Call**: 1 Gemini call per story (vs 1-15 with tool round-trips)
+5. **Hybrid RAG**: BM25 (FTS5) + Vector (embeddings) with RRF fusion
 
 ## Key Files Reference
 
@@ -46,7 +60,8 @@ RSS Feeds (17 sources)
 | `main.py` | CLI entry point | `main()`, `cmd_run()`, `cmd_status()` |
 | `pipeline.py` | Main orchestration | `run_once()`, `run_continuous()` |
 | `config.py` | Configuration | `Config.load()`, `Config.validate()` |
-| `database.py` | SQLite storage | `Database.save()`, `Database.seen_hashes()` |
+| `database.py` | SQLite + hybrid RAG | `Database.save()`, `Database.hybrid_search()` |
+| `embeddings.py` | BGE embeddings | `encode_text()`, `EmbeddingModel` |
 | `feeds.py` | RSS fetching | `fetch_all_feeds()` |
 | `notifications.py` | Output | `save_markdown_report()`, `notify_batch()` |
 | `mlx_server.py` | Local model server | `MLXServerManager.start()`, `MLXServerManager.stop()` |
@@ -56,7 +71,7 @@ RSS Feeds (17 sources)
 | File | Class | Description |
 |------|-------|-------------|
 | `agents/classifier.py` | `ClassifierAgent` | Fast importance classification (local MLX or Gemini) |
-| `agents/researcher.py` | `ResearcherAgent` | Deep analysis with web search, fetch, and history tools |
+| `agents/researcher.py` | `ResearcherAgent`, `StoryContext` | Deep analysis with Gemini + Google Search grounding |
 
 ### Models
 
@@ -66,19 +81,18 @@ RSS Feeds (17 sources)
 | `models/classification.py` | `ClassificationResult`, `ImportanceCategory` | Classification output |
 | `models/research.py` | `ResearchReport`, `Analysis` | Research output |
 
-### Tools (Used by ResearcherAgent)
+### Tools (Used by Pipeline)
 
 | File | Function | Status |
 |------|----------|--------|
-| `tools/search.py` | `web_search()` | Optional - requires Google CSE or SerpAPI keys |
-| `tools/fetch.py` | `fetch_article()` | Active - fetches and parses HTML |
-| `tools/database.py` | `query_related_stories()` | Active - keyword search on history |
+| `tools/fetch.py` | `fetch_article()` | Active - fetches article content before researcher |
+| `tools/search.py` | `web_search()` | Legacy - replaced by Gemini grounding |
+| `tools/database.py` | `query_related_stories()` | Legacy - replaced by hybrid RAG |
 
 ### Optional Features
 
 | File | Feature | Enable With |
 |------|---------|-------------|
-| `memory/vector_store.py` | Semantic search via ChromaDB | `ENABLE_MEMORY=true` |
 | `observability/tracing.py` | Distributed tracing via Logfire | `ENABLE_LOGFIRE=true` |
 | `observability/logging.py` | Enhanced logging with JSON/context | `LOG_FORMAT=json` |
 
@@ -87,11 +101,15 @@ RSS Feeds (17 sources)
 1. **Prune**: Delete records older than `PRUNE_AFTER_DAYS`
 2. **Fetch**: Concurrent RSS fetching with SSL fallback
 3. **Dedup**: Filter stories already in database by hash
-4. **Classify**: Run `ClassifierAgent.classify_batch()` on new stories
+4. **Classify**: Run `ClassifierAgent.classify_batch()` on new stories (local LLM)
 5. **Split**: Separate important (researcher) from not-important (skip)
-6. **Analyze**: Run `ResearcherAgent.analyze_batch()` on important stories
-7. **Save**: Store all results in SQLite
-8. **Notify**: Generate reports, send webhooks, append JSONL
+6. **Context Gathering** (parallel, for important stories only):
+   - URL Fetch: Get full article content via `fetch_article()`
+   - Hybrid RAG: Query related stories via `Database.hybrid_search()`
+7. **Analyze**: Run `ResearcherAgent.analyze_batch()` with pre-fetched context
+   - Single Gemini API call per story with Google Search grounding
+8. **Save**: Store results + embeddings (for important stories) in SQLite
+9. **Notify**: Generate reports, send webhooks, append JSONL
 
 ## Configuration Reference
 
@@ -120,15 +138,13 @@ MAX_WORKERS=8                 # Concurrent operations
 NOTIFICATION_WEBHOOK_URL=     # Optional webhook
 ALERTS_FILE=                  # Optional JSONL file
 
-# === Optional: Web Search ===
-# Enable one of these backends for web search capability
-GOOGLE_API_KEY=               # Google Custom Search API key
-GOOGLE_CSE_ID=                # Google Custom Search Engine ID
-SERPAPI_KEY=                  # Or use SerpAPI instead
-
 # === Optional Features ===
-ENABLE_MEMORY=false           # ChromaDB vector search
 ENABLE_LOGFIRE=false          # Distributed tracing
+
+# === Legacy (no longer needed) ===
+# Web search is now handled by Gemini's Google Search grounding
+# GOOGLE_API_KEY, GOOGLE_CSE_ID, SERPAPI_KEY - not required
+# ENABLE_MEMORY - replaced by built-in hybrid RAG in SQLite
 
 # === Logging ===
 LOG_LEVEL=INFO                # DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -180,6 +196,7 @@ class Story(BaseModel):
     description: str              # HTML/text from RSS
     pub_date: datetime            # Publication timestamp (UTC)
     source_url: str               # RSS feed URL
+    article_url: str              # URL of the actual article (for fetching)
 
     @property
     def hash(self) -> str:        # 16-char SHA-256 dedup key
@@ -228,31 +245,32 @@ CREATE TABLE stories (
     source_url TEXT                -- RSS feed URL
 );
 
+-- FTS5 full-text search (BM25) - indexes ALL stories
+CREATE VIRTUAL TABLE stories_fts USING fts5(
+    hash, title, summary,
+    content='stories',
+    tokenize='porter unicode61'
+);
+
+-- Embeddings for vector search - IMPORTANT stories only
+CREATE TABLE story_embeddings (
+    hash TEXT PRIMARY KEY,         -- Story hash (FK to stories)
+    embedding BLOB NOT NULL        -- 384-dim float32 vector (BGE-small)
+);
+
 -- Indexes
 CREATE INDEX idx_processed ON stories(processed_at);
 CREATE INDEX idx_important ON stories(is_important);
 ```
 
+### Hybrid RAG Search
+
+The `Database.hybrid_search()` method combines:
+1. **BM25** (via FTS5): Keyword matching on title and summary
+2. **Vector** (via embeddings): Semantic similarity using cosine distance
+3. **RRF Fusion**: Reciprocal Rank Fusion to combine rankings
+
 ## Extending the Pipeline
-
-### Adding a New Tool
-
-1. Create `tools/new_tool.py`:
-```python
-async def my_tool(query: str) -> MyResult:
-    """Tool description for the agent."""
-    # Implementation
-    return MyResult(...)
-```
-
-2. Register in `agents/researcher.py`:
-```python
-@agent.tool
-async def my_tool(ctx: RunContext[ResearchContext], query: str) -> str:
-    """Docstring shown to model - explain when to use this tool."""
-    result = await my_tool_impl(query)
-    return result.summary  # Return string for model
-```
 
 ### Adding a New RSS Feed
 
@@ -264,22 +282,27 @@ DEFAULT_RSS_URLS = [
 ]
 ```
 
-### Enabling Web Search
+### Web Search
 
-Web search is disabled by default. To enable it, configure one of these backends:
+Web search is now handled automatically by **Gemini's Google Search grounding**.
+No API keys required - it's built into the researcher agent.
 
-**Option 1: Google Custom Search**
-```bash
-export GOOGLE_API_KEY=your-api-key
-export GOOGLE_CSE_ID=your-search-engine-id
+The researcher uses `WebSearchTool` from PydanticAI, which enables Gemini to
+search the web during analysis. This provides real-time context without
+the cost of separate search API calls.
+
+### Customizing Context Gathering
+
+To modify how context is gathered before research, edit `pipeline.py`:
+```python
+async def _gather_story_context(story, classification, db) -> StoryContext:
+    # URL fetch runs in parallel with RAG search
+    article_content, related_stories = await asyncio.gather(
+        fetch_content(),  # Modify fetch logic here
+        query_rag(),      # Modify RAG query here
+    )
+    return StoryContext(...)
 ```
-
-**Option 2: SerpAPI**
-```bash
-export SERPAPI_KEY=your-serpapi-key
-```
-
-The search tool (`tools/search.py`) will automatically detect which backend is configured.
 
 ## Local MLX Classification
 

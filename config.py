@@ -27,7 +27,6 @@ Environment Variables:
         ALERTS_FILE: Path for JSONL alert file
 
     Optional Features:
-        ENABLE_MEMORY: Enable ChromaDB vector store for semantic search
         ENABLE_LOGFIRE: Enable Logfire/OpenTelemetry tracing
 
     Logging:
@@ -207,11 +206,6 @@ class Config:
     log_max_bytes: int = 0  # LOG_MAX_BYTES - Max file size (0 = time-based rotation)
     log_format: str = "text"  # LOG_FORMAT - 'text' or 'json' for structured logging
 
-    # === Optional: Vector Memory ===
-    # Requires: pip install chromadb
-    enable_memory: bool = False  # ENABLE_MEMORY - Enable semantic story search
-    vector_db_path: Path = field(default_factory=lambda: Path("vectors"))
-
     # === Optional: Observability ===
     # Requires: pip install logfire
     enable_logfire: bool = False  # ENABLE_LOGFIRE - Enable distributed tracing
@@ -236,8 +230,6 @@ class Config:
             retry_base_delay=_env_float("RETRY_BASE_DELAY", 1.0),
             log_dir=Path(_env("LOG_DIR", "log")),
             reports_dir=Path(_env("REPORTS_DIR", "reports")),
-            enable_memory=_env_bool("ENABLE_MEMORY", False),
-            vector_db_path=Path(_env("VECTOR_DB_PATH", "vectors")),
             enable_logfire=_env_bool("ENABLE_LOGFIRE", False),
             logfire_token=_env("LOGFIRE_TOKEN"),
             log_level=_env("LOG_LEVEL", "INFO").upper(),

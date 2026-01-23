@@ -169,6 +169,7 @@ def _parse_feed_content(content: str, source_url: str, max_age_hours: int) -> li
             description=entry.get("description", "") or entry.get("summary", ""),
             pub_date=pub_date,
             source_url=source_url,
+            article_url=entry.get("link", ""),
         ))
 
     return stories

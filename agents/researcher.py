@@ -3,24 +3,26 @@
 This module implements the ResearcherAgent, which performs comprehensive
 analysis on stories that passed the importance classification.
 
-Design Philosophy:
-    - Depth over speed: Takes time to gather context and verify claims
-    - Tool-augmented: Uses web search, article fetching, and history lookup
-    - Structured output: Produces ResearchReport with summary, key points, etc.
+Architecture (v2 - Grounded):
+    - Single Gemini API call per story with Google Search grounding
+    - All context (article content, related stories) pre-fetched and passed in prompt
+    - No custom function tools (incompatible with Google built-in tools)
+    - WebSearchTool provides real-time web context via Gemini grounding
 
-Available Tools:
-    - search_web: Search for background info and fact-checking
-    - fetch_source: Retrieve full article content from URLs
-    - get_related_stories: Query database for historical context
+Context Flow:
+    1. URL Fetch (deterministic): Full article content
+    2. Hybrid RAG (deterministic): Related stories from database
+    3. Researcher (Gemini + grounding): Single call with all context
 
-The researcher agent is more resource-intensive than the classifier,
-so concurrency is limited (typically 3 parallel analyses).
+This design provides:
+    - Cost efficiency: 1 API call per story (vs 1-15 with tools)
+    - Real-time context: Google Search grounding for current information
+    - Historical context: Pre-fetched related stories from local database
 """
 
 import asyncio
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 from pydantic_ai import Agent, RunContext, UsageLimits
 
@@ -28,32 +30,36 @@ from config import Config
 from models.story import Story
 from models.classification import ClassificationResult
 from models.research import ResearchReport
-from tools.search import web_search
-from tools.fetch import fetch_article
-from tools.database import query_related_stories
 
 logger = logging.getLogger(__name__)
 
 
 # === System Prompts ===
 # Bilingual prompts instructing the model on analysis methodology.
+# Context is now provided in the user message, not via tools.
 
 RESEARCHER_PROMPTS = {
     "zh": """你是一名资深新闻研究员和事实核查专家，具备深度分析和批判性思维能力。
 
+## 你将收到的信息
+
+1. **新闻标题和元数据** - 来自RSS订阅源
+2. **文章全文** - 已获取的原始内容（如果可用）
+3. **相关历史报道** - 来自我们数据库的过往分析
+
 ## 分析流程
 
-### 第一步：获取原始内容
-- 使用 fetch_source 获取完整文章内容
-- 如果描述中有URL，优先获取原始来源
+### 第一步：理解内容
+- 仔细阅读提供的文章全文
+- 注意关键声明、数据和引用
 
-### 第二步：事实核查与背景调研
-- 使用 search_web 验证关键声明
+### 第二步：网络搜索验证
+- 使用网络搜索功能验证关键声明
 - 搜索相关背景信息和不同观点
-- 交叉验证多个来源
+- 获取最新的相关发展
 
 ### 第三步：历史关联
-- 使用 get_related_stories 查询相关历史报道
+- 查看提供的相关历史报道
 - 建立事件发展脉络
 - 识别是否为持续性事件的最新进展
 
@@ -73,7 +79,7 @@ RESEARCHER_PROMPTS = {
 
 ### thought
 记录你的分析过程：
-- 使用了哪些工具，获得了什么信息
+- 使用了哪些搜索查询
 - 哪些声明得到了验证，哪些无法确认
 - 来源的可信度评估
 - 是否发现矛盾信息
@@ -90,24 +96,30 @@ RESEARCHER_PROMPTS = {
 ## 重要原则
 - 当信息不完整时，明确说明而非猜测
 - 来源冲突时，呈现多方观点并注明
-- 工具返回空结果时，说明"未找到相关信息"
+- 搜索无结果时，说明"未找到相关信息"
 - 保持专业客观，避免主观臆断""",
 
     "en": """You are a senior news researcher and fact-checker with deep analytical and critical thinking capabilities.
 
+## Information You Will Receive
+
+1. **News title and metadata** - From RSS feed
+2. **Full article content** - Pre-fetched original content (if available)
+3. **Related past coverage** - Previous analyses from our database
+
 ## Analysis Workflow
 
-### Step 1: Retrieve Original Content
-- Use fetch_source to get complete article content
-- If URLs are in the description, prioritize fetching original sources
+### Step 1: Understand Content
+- Carefully read the provided article content
+- Note key claims, data, and quotes
 
-### Step 2: Fact-Check and Background Research
-- Use search_web to verify key claims
+### Step 2: Web Search Verification
+- Use web search to verify key claims
 - Search for relevant background and alternative perspectives
-- Cross-reference multiple sources
+- Get latest related developments
 
 ### Step 3: Historical Context
-- Use get_related_stories to query related past coverage
+- Review the provided related stories
 - Establish timeline of developments
 - Identify if this is latest update on ongoing story
 
@@ -127,7 +139,7 @@ Structure:
 
 ### thought
 Document your analysis process:
-- Which tools used and what was found
+- What search queries you used
 - Which claims verified, which couldn't be confirmed
 - Source credibility assessment
 - Any contradictory information discovered
@@ -144,7 +156,7 @@ Document your analysis process:
 ## Key Principles
 - When information is incomplete, explicitly state this rather than speculate
 - When sources conflict, present multiple views with attribution
-- When tools return empty results, note "no related information found"
+- When search returns nothing relevant, note "no related information found"
 - Maintain professional objectivity, avoid subjective speculation""",
 }
 
@@ -153,37 +165,54 @@ Document your analysis process:
 class ResearchContext:
     """Runtime context passed to the researcher agent.
 
-    Provides configuration and resources needed by the agent's tools.
-
     Attributes:
         language: Output language ('zh' or 'en')
-        db_path: Path to SQLite database for history queries
-        request_limit: Maximum API requests per story analysis
     """
     language: str = "en"
-    db_path: Path = None
-    request_limit: int = 15
+
+
+@dataclass
+class StoryContext:
+    """Pre-fetched context for a story to be analyzed.
+
+    This replaces the tool-based context gathering. All information
+    is gathered before the researcher agent runs.
+
+    Attributes:
+        story: The story to analyze
+        classification: Classification result (for category context)
+        article_content: Full article text from URL fetch (may be empty if fetch failed)
+        related_stories: Formatted string of related stories from hybrid RAG
+    """
+    story: Story
+    classification: ClassificationResult | None = None
+    article_content: str = ""
+    related_stories: str = ""
 
 
 def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
-    """Create the underlying PydanticAI agent with tools.
+    """Create the underlying PydanticAI agent with Google Search grounding.
 
     The agent is configured with:
     - Structured output: ResearchReport Pydantic model
     - Dynamic system prompt: Selected based on language context
-    - Three tools: web search, article fetch, database query
-    - Retry logic: 3 attempts on failure
+    - WebSearchTool: Google Search grounding for real-time information
+    - No custom function tools (incompatible with built-in tools on Google)
 
     Args:
         model: PydanticAI model string (e.g., 'google-gla:gemini-3-flash-preview')
 
     Returns:
-        Configured PydanticAI Agent with tools
+        Configured PydanticAI Agent with grounding
     """
+    # Import WebSearchTool for grounding
+    from pydantic_ai import WebSearchTool
+
     agent = Agent(
         model,
         output_type=ResearchReport,
         system_prompt=RESEARCHER_PROMPTS["en"],  # Default fallback
+        builtin_tools=[WebSearchTool()],  # Google Search grounding
         retries=3,
     )
 
@@ -192,158 +221,122 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
         """Select system prompt based on language setting."""
         return RESEARCHER_PROMPTS.get(ctx.deps.language, RESEARCHER_PROMPTS["en"])
 
-    # === Tool Definitions ===
-    # These tools are available to the model during analysis.
-    # The model decides when and how to use them based on the task.
-
-    @agent.tool
-    async def search_web(ctx: RunContext[ResearchContext], query: str) -> str:
-        """Search the web to verify facts or gather background information.
-
-        Use this tool to:
-        - Fact-check claims in the article
-        - Find additional context or background
-        - Discover related news or developments
-
-        Args:
-            query: Search query (be specific for better results)
-
-        Returns:
-            Formatted search results or error message
-        """
-        logger.debug("Tool call: search_web | query=%s", query[:80])
-        results = await web_search(query)
-        logger.debug("Tool result: search_web | chars=%d", len(results.summary))
-        return results.summary
-
-    @agent.tool
-    async def fetch_source(ctx: RunContext[ResearchContext], url: str) -> str:
-        """Fetch full content from an article URL.
-
-        Use this tool to:
-        - Read the complete article text
-        - Extract quotes or specific details
-        - Verify information from the source
-
-        Args:
-            url: Full URL of the article to fetch
-
-        Returns:
-            Article title and content preview (or error message)
-        """
-        logger.debug("Tool call: fetch_source | url=%s", url[:100])
-        content = await fetch_article(url)
-        logger.debug("Tool result: fetch_source | chars=%d", len(content.summary))
-        return content.summary
-
-    @agent.tool
-    async def get_related_stories(ctx: RunContext[ResearchContext], topic: str) -> str:
-        """Query database for previously analyzed stories on a topic.
-
-        Use this tool to:
-        - Find historical context for ongoing stories
-        - Discover related coverage from past analysis
-        - Build timeline of developments
-
-        Args:
-            topic: Keywords to search (e.g., "OpenAI GPT" or "EU AI regulation")
-
-        Returns:
-            List of related stories with dates and summaries
-        """
-        logger.debug("Tool call: get_related_stories | topic=%s", topic[:80])
-        if ctx.deps.db_path:
-            history = await query_related_stories(topic, ctx.deps.db_path, days=30)
-            logger.debug("Tool result: get_related_stories | chars=%d", len(history.summary))
-            return history.summary
-        logger.debug("Tool result: get_related_stories | no database available")
-        return "No story database available."
-
     return agent
 
 
+def _build_user_message(ctx: StoryContext) -> str:
+    """Build the user message with all pre-fetched context.
+
+    Args:
+        ctx: StoryContext with all gathered information
+
+    Returns:
+        Formatted message string for the researcher
+    """
+    story = ctx.story
+    publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
+
+    # Build classification context
+    classification_lines = []
+    if ctx.classification:
+        classification_lines.append(f"Category: {ctx.classification.category.value}")
+        if ctx.classification.reasoning:
+            classification_lines.append(f"Classification: {ctx.classification.reasoning}")
+    classification_context = "\n".join(classification_lines)
+
+    # Build article content section
+    if ctx.article_content:
+        article_section = f"""## Full Article Content
+{ctx.article_content[:8000]}
+{"... [truncated]" if len(ctx.article_content) > 8000 else ""}"""
+    else:
+        article_section = """## Full Article Content
+(Article content could not be fetched. Analyze based on the description and use web search for verification.)"""
+
+    # Build related stories section
+    if ctx.related_stories and ctx.related_stories != "No related stories found in database.":
+        related_section = f"""## Related Past Coverage (from our database)
+{ctx.related_stories}"""
+    else:
+        related_section = """## Related Past Coverage
+No related stories found in our database. This may be a new topic."""
+
+    message = f"""Analyze this news story:
+
+## Story Information
+Title: {story.title}
+Publisher: {publishers}
+Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
+{classification_context}
+
+## RSS Description
+{story.description[:2000] if story.description else "No description available"}
+
+{article_section}
+
+{related_section}
+
+## Instructions
+1. Read and understand the provided content
+2. Use web search to verify key claims and gather current context
+3. Consider the historical context from related stories
+4. Provide a comprehensive analysis following the output structure"""
+
+    return message
+
+
 class ResearcherAgent:
-    """Performs deep analysis on important news stories.
+    """Performs deep analysis on important news stories using Gemini with grounding.
 
     This agent is the second stage of the analysis pipeline. It receives
-    stories that were classified as important and produces comprehensive
-    research reports with summaries, key points, and context.
+    stories that were classified as important along with pre-fetched context
+    (article content, related stories) and produces comprehensive research reports.
 
-    The agent has access to three tools:
-    - search_web: Search for background and fact-checking
-    - fetch_source: Retrieve full article content
-    - get_related_stories: Query historical story database
-
-    The model autonomously decides which tools to use based on the
-    story content and analysis requirements.
+    Architecture:
+        - Single Gemini API call per story
+        - WebSearchTool for real-time Google Search grounding
+        - Pre-fetched context passed in prompt (no custom tools)
 
     Example:
         >>> researcher = ResearcherAgent(config)
-        >>> report = await researcher.analyze(story, classification)
+        >>> context = StoryContext(
+        ...     story=story,
+        ...     classification=classification,
+        ...     article_content=fetched_article,
+        ...     related_stories=rag_results,
+        ... )
+        >>> report = await researcher.analyze(context)
         >>> print(report.summary)
-        >>> print(report.key_points)
     """
 
     def __init__(self, config: Config):
         """Initialize the researcher agent.
 
         Args:
-            config: Application configuration with model, language, and db settings
+            config: Application configuration with model and language settings
         """
         self.config = config
         self._agent = _create_agent(config.researcher_model)
-        self._context = ResearchContext(
-            language=config.language,
-            db_path=config.db_path,
-            request_limit=getattr(config, 'researcher_request_limit', 15),
-        )
+        self._context = ResearchContext(language=config.language)
 
-    async def analyze(
-        self,
-        story: Story,
-        classification: ClassificationResult | None = None,
-    ) -> ResearchReport:
-        """Analyze a story in depth.
+    async def analyze(self, story_context: StoryContext) -> ResearchReport:
+        """Analyze a story with pre-fetched context.
 
         Args:
-            story: Story to analyze
-            classification: Optional classification for context
+            story_context: StoryContext with story and all pre-fetched information
 
         Returns:
             Research report with summary and analysis
         """
-        publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
-
-        # Build context from classification
-        context_lines = []
-        if classification:
-            context_lines.append(f"Category: {classification.category.value}")
-            if classification.reasoning:
-                context_lines.append(f"Classification: {classification.reasoning}")
-        context = "\n".join(context_lines)
-
-        message = f"""Analyze this news story:
-
-Title: {story.title}
-Publisher: {publishers}
-Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
-{context}
-
-Description:
-{story.description[:1000] if story.description else "No description"}
-
-Instructions:
-1. Summarize key information comprehensively
-2. Use search to verify claims and add background
-3. Check for related stories in database
-4. Assess significance and impact"""
+        story = story_context.story
+        message = _build_user_message(story_context)
 
         try:
             logger.info("Analysis started | title=%s", story.title[:60])
             result = await self._agent.run(
                 message,
                 deps=self._context,
-                usage_limits=UsageLimits(request_limit=self._context.request_limit),
+                usage_limits=UsageLimits(request_limit=5),  # Reduced from 15 (no tool round-trips)
             )
             # Log token usage
             usage = result.usage()
@@ -362,19 +355,19 @@ Instructions:
 
     async def analyze_batch(
         self,
-        stories: list[tuple[Story, ClassificationResult | None]],
+        story_contexts: list[StoryContext],
         max_concurrent: int = 3,
     ) -> list[tuple[Story, ResearchReport]]:
         """Analyze multiple stories concurrently.
 
         Args:
-            stories: List of (story, classification) tuples
+            story_contexts: List of StoryContext objects with pre-fetched data
             max_concurrent: Max concurrent API calls
 
         Returns:
             List of (story, report) tuples
         """
-        total = len(stories)
+        total = len(story_contexts)
         completed = 0
         semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -382,25 +375,24 @@ Instructions:
 
         async def analyze_one(
             index: int,
-            story: Story,
-            classification: ClassificationResult | None,
+            story_ctx: StoryContext,
         ) -> tuple[Story, ResearchReport]:
             nonlocal completed
             async with semaphore:
-                logger.info("Processing story %d/%d | title=%s", index + 1, total, story.title[:50])
-                result = await self.analyze(story, classification)
+                logger.info("Processing story %d/%d | title=%s", index + 1, total, story_ctx.story.title[:50])
+                result = await self.analyze(story_ctx)
                 completed += 1
                 logger.info("Progress: %d/%d complete (%.0f%%)", completed, total, completed / total * 100)
-                return story, result
+                return story_ctx.story, result
 
-        tasks = [analyze_one(i, s, c) for i, (s, c) in enumerate(stories)]
+        tasks = [analyze_one(i, ctx) for i, ctx in enumerate(story_contexts)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         output = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error("Batch analysis error for story %d: %s", i, result, exc_info=result)
-                output.append((stories[i][0], ResearchReport.empty()))
+                output.append((story_contexts[i].story, ResearchReport.empty()))
             else:
                 output.append(result)
 

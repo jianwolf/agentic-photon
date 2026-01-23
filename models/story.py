@@ -49,6 +49,7 @@ class Story(BaseModel):
     description: str = Field(default="", description="HTML/text from RSS entry")
     pub_date: datetime = Field(description="Publication timestamp (UTC)")
     source_url: str = Field(description="URL of the source RSS feed")
+    article_url: str = Field(default="", description="URL of the actual article")
 
     @property
     def hash(self) -> str:

@@ -2,23 +2,24 @@
 
 This module coordinates the entire news analysis workflow:
 
-Pipeline Flow:
+Pipeline Flow (v2 - Grounded):
     1. FETCH: Concurrently fetch all RSS feeds
     2. DEDUP: Filter out previously-seen stories (by hash)
-    3. CLASSIFY: Run classifier agent on new stories
+    3. CLASSIFY: Run classifier agent (local LLM) on new stories
     4. SPLIT: Separate important from non-important stories
-    5. ANALYZE: Run researcher agent on important stories
-    6. SAVE: Store all results in database
-    7. NOTIFY: Send reports and alerts for important stories
+    5. CONTEXT: For important stories, gather context in parallel:
+       - URL Fetch: Get full article content
+       - Hybrid RAG: Query related stories from database
+    6. ANALYZE: Run researcher agent (Gemini + grounding) with pre-fetched context
+    7. SAVE: Store all results in database + embeddings for important stories
+    8. NOTIFY: Send reports and alerts for important stories
 
-The Pipeline class manages all components and provides both
-single-run and continuous polling modes.
-
-Usage:
-    >>> config = Config.load()
-    >>> pipeline = Pipeline(config)
-    >>> stats = await pipeline.run_once()
-    >>> pipeline.close()
+Key Changes from v1:
+    - Researcher uses Gemini with Google Search grounding (no custom tools)
+    - Context (article + related stories) pre-fetched before researcher call
+    - Hybrid RAG: BM25 + Vector search with RRF fusion
+    - Single Gemini API call per story (vs 1-15 with tool round-trips)
+    - Embeddings stored for important stories (for future vector search)
 """
 
 import asyncio
@@ -32,10 +33,13 @@ from config import Config
 from database import Database
 from feeds import fetch_all_feeds
 from models.research import Analysis
+from models.story import Story
+from models.classification import ClassificationResult
 from agents.classifier import ClassifierAgent
-from agents.researcher import ResearcherAgent
+from agents.researcher import ResearcherAgent, StoryContext
+from tools.fetch import fetch_article
+from embeddings import encode_text
 from notifications import notify_batch
-from memory.vector_store import VectorStore
 from observability.logging import set_run_context, clear_context
 
 logger = logging.getLogger(__name__)
@@ -75,6 +79,74 @@ class PipelineStats:
         return d
 
 
+async def _gather_story_context(
+    story: Story,
+    classification: ClassificationResult | None,
+    db: Database,
+) -> StoryContext:
+    """Gather all context for a story in parallel.
+
+    Runs URL fetch and hybrid RAG search concurrently, then
+    combines results into a StoryContext for the researcher.
+
+    Args:
+        story: Story to gather context for
+        classification: Classification result (for category context)
+        db: Database instance for hybrid RAG search
+
+    Returns:
+        StoryContext with all gathered information
+    """
+    # Build search query from title + description snippet
+    query_text = story.title
+    if story.description:
+        # Add first 200 chars of description for better search
+        desc_snippet = story.description[:200].replace('\n', ' ')
+        query_text = f"{story.title} {desc_snippet}"
+
+    # Generate embedding for vector search
+    try:
+        query_embedding = encode_text(query_text)
+    except Exception as e:
+        logger.warning("Embedding generation failed: %s", e)
+        query_embedding = None
+
+    # Run fetch and RAG in parallel
+    async def fetch_content() -> str:
+        if story.article_url:
+            result = await fetch_article(story.article_url)
+            if result.success:
+                return result.content
+            logger.debug("Article fetch failed for %s: %s", story.article_url[:50], result.error)
+        return ""
+
+    async def query_rag() -> str:
+        try:
+            results = db.hybrid_search(
+                query=story.title,
+                query_embedding=query_embedding,
+                limit=5,
+                days=30,
+            )
+            return results.format_context()
+        except Exception as e:
+            logger.warning("Hybrid RAG search failed: %s", e)
+            return "No related stories found in database."
+
+    # Execute in parallel
+    article_content, related_stories = await asyncio.gather(
+        fetch_content(),
+        query_rag(),
+    )
+
+    return StoryContext(
+        story=story,
+        classification=classification,
+        article_content=article_content,
+        related_stories=related_stories,
+    )
+
+
 class Pipeline:
     """Async news analysis pipeline using PydanticAI agents.
 
@@ -82,14 +154,15 @@ class Pipeline:
     analysis and notification. Manages all component lifecycles.
 
     Components:
-        - Database: SQLite storage for dedup and results
-        - ClassifierAgent: Fast importance classification
-        - ResearcherAgent: Deep analysis with tools
-        - VectorStore: Optional semantic search (if enabled)
+        - Database: SQLite storage with hybrid RAG (FTS5 + embeddings)
+        - ClassifierAgent: Fast importance classification (local LLM)
+        - ResearcherAgent: Deep analysis with Gemini + grounding
 
-    Modes:
-        - run_once(): Single execution
-        - run_continuous(): Polling loop with configurable interval
+    Architecture:
+        1. Classifier runs on local LLM (fast, cheap)
+        2. For important stories, context gathered in parallel (deterministic)
+        3. Researcher runs with pre-fetched context + Google Search grounding
+        4. Single Gemini API call per story
     """
 
     def __init__(self, config: Config):
@@ -102,11 +175,6 @@ class Pipeline:
         self.db = Database(config.db_path)
         self.classifier = ClassifierAgent(config)
         self.researcher = ResearcherAgent(config)
-        self.vector_store: VectorStore | None = None
-
-        # Optional: Vector memory for semantic search
-        if config.enable_memory:
-            self.vector_store = VectorStore(config.vector_db_path)
 
         # Optional: Distributed tracing
         if config.enable_logfire:
@@ -120,10 +188,11 @@ class Pipeline:
             1. Prune old records from database
             2. Fetch all RSS feeds concurrently
             3. Deduplicate against existing stories
-            4. Classify new stories for importance
-            5. Analyze important stories in depth (limited by max_stories)
-            6. Save all results to database
-            7. Send notifications for important stories
+            4. Classify new stories for importance (local LLM)
+            5. Gather context for important stories (parallel fetch + RAG)
+            6. Analyze important stories (Gemini + grounding)
+            7. Save all results + embeddings to database
+            8. Send notifications for important stories
 
         Args:
             max_stories: Maximum important stories to analyze (0 = unlimited).
@@ -165,14 +234,12 @@ class Pipeline:
                 return stats
 
             # Apply max_stories limit BEFORE classification
-            # Only process (classify + save) the limited number of stories
             if max_stories > 0 and len(new_stories) > max_stories:
-                # Sort by pub_date descending (latest first) and take top N
                 new_stories.sort(key=lambda s: s.pub_date, reverse=True)
                 new_stories = new_stories[:max_stories]
                 logger.info("Limited to %d latest stories for processing", max_stories)
 
-            # Classify
+            # Classify (local LLM)
             classified = await self.classifier.classify_batch(
                 new_stories,
                 max_concurrent=self.config.max_workers,
@@ -185,29 +252,42 @@ class Pipeline:
 
             logger.info("Classification complete | important=%d skip=%d", len(important), len(not_important))
 
-            # Save non-important stories
+            # Save non-important stories (no embedding needed)
             for story, _ in not_important:
                 self.db.save(story, Analysis.empty(), commit=False)
 
-            # Analyze important stories
+            # Process important stories
             if important:
+                # Gather context for all important stories in parallel
+                logger.info("Gathering context for %d important stories", len(important))
+                context_tasks = [
+                    _gather_story_context(story, classification, self.db)
+                    for story, classification in important
+                ]
+                story_contexts = await asyncio.gather(*context_tasks)
+
+                # Analyze with researcher (Gemini + grounding)
                 analyzed = await self.researcher.analyze_batch(
-                    important,
+                    story_contexts,
                     max_concurrent=min(3, self.config.max_workers),
                 )
                 stats.analyzed = len(analyzed)
 
+                # Save results and generate embeddings
                 to_notify = []
                 for story, report in analyzed:
                     if report.summary:
                         analysis = Analysis.from_report(report)
                         self.db.save(story, analysis, commit=False)
 
-                        if self.vector_store:
-                            await self.vector_store.add_story(
-                                story.hash, story.title, report.summary,
-                                story.pub_date, story.source_url,
-                            )
+                        # Generate and save embedding for important story
+                        try:
+                            # Embed title + summary for high-quality vector search
+                            embed_text = f"{story.title} {report.summary[:500]}"
+                            embedding = encode_text(embed_text)
+                            self.db.save_embedding(story.hash, embedding, commit=False)
+                        except Exception as e:
+                            logger.warning("Embedding save failed for %s: %s", story.hash, e)
 
                         to_notify.append((story, analysis))
                         logger.info("Story analyzed | hash=%s title=%s", story.hash, story.title[:60])
@@ -222,10 +302,8 @@ class Pipeline:
                     stats.notified = ok
                     stats.errors += fail
 
-            # Commit
+            # Commit all changes
             self.db.commit()
-            if self.vector_store:
-                self.vector_store.persist()
 
         except asyncio.CancelledError:
             logger.info("Pipeline run cancelled")
@@ -275,8 +353,6 @@ class Pipeline:
     def close(self) -> None:
         """Clean up resources."""
         self.db.close()
-        if self.vector_store:
-            self.vector_store.persist()
 
 
 async def run_once(config: Config, max_stories: int = 0) -> dict[str, Any]:
