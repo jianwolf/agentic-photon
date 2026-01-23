@@ -257,11 +257,19 @@ def setup_logging(
 
     # Reduce noise from third-party libraries
     noisy_loggers = (
+        # HTTP clients
         "aiohttp", "urllib3", "httpx", "httpcore", "asyncio",
+        # Database/vector stores
         "chromadb", "chromadb.telemetry", "chromadb.config",
+        # Tracing
         "opentelemetry", "opentelemetry.sdk", "opentelemetry.exporter",
-        "pydantic_ai", "feedparser", "filelock",
-        "huggingface_hub.utils._http",
+        # AI/ML libraries
+        "pydantic_ai", "feedparser",
+        "openai._base_client",  # Verbose request/response logging
+        "google_genai.models",  # "AFC is enabled" spam
+        # Embedding model loading
+        "sentence_transformers", "numexpr.utils",
+        "filelock", "huggingface_hub.utils._http",
     )
     for lib in noisy_loggers:
         logging.getLogger(lib).setLevel(logging.WARNING)

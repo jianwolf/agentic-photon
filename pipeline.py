@@ -61,6 +61,10 @@ class PipelineStats:
         notified: Successful notifications sent
         errors: Count of errors at any stage
         duration: Total run time in seconds
+        input_tokens: Total input tokens used by researcher
+        output_tokens: Total output tokens used by researcher
+        articles_fetched: Number of articles successfully fetched
+        rag_queries: Number of RAG queries performed
     """
 
     fetched: int = 0      # Stories from RSS feeds
@@ -71,6 +75,10 @@ class PipelineStats:
     notified: int = 0     # Notifications sent
     errors: int = 0       # Errors encountered
     duration: float = 0.0 # Run time (seconds)
+    input_tokens: int = 0  # Researcher input tokens
+    output_tokens: int = 0 # Researcher output tokens
+    articles_fetched: int = 0  # Articles successfully fetched
+    rag_queries: int = 0   # RAG queries performed
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -115,13 +123,17 @@ async def _gather_story_context(
     async def fetch_content() -> tuple[str, bool]:
         if story.article_url:
             result = await fetch_article(story.article_url)
-            if result.success:
+            if result.success and result.content:
                 logger.debug(
                     "Article fetched | url=%s chars=%d",
                     story.article_url[:50], len(result.content)
                 )
                 return result.content, True
-            logger.debug("Article fetch failed for %s: %s", story.article_url[:50], result.error)
+            # Log why fetch failed
+            if not result.success:
+                logger.debug("Article fetch failed | url=%s error=%s", story.article_url[:50], result.error)
+            elif not result.content:
+                logger.debug("Article fetch empty | url=%s", story.article_url[:50])
         return "", False
 
     async def query_rag() -> tuple[str, int]:
@@ -280,12 +292,24 @@ class Pipeline:
                 ]
                 story_contexts = await asyncio.gather(*context_tasks)
 
+                # Log context gathering summary
+                articles_ok = sum(1 for ctx in story_contexts if ctx.article_content)
+                rag_ok = sum(1 for ctx in story_contexts if ctx.related_stories and "No related" not in ctx.related_stories)
+                stats.articles_fetched = articles_ok
+                stats.rag_queries = len(story_contexts)
+                logger.info(
+                    "Context gathered | stories=%d articles=%d/%d rag=%d/%d",
+                    len(story_contexts), articles_ok, len(story_contexts), rag_ok, len(story_contexts)
+                )
+
                 # Analyze with researcher (Gemini + grounding)
-                analyzed = await self.researcher.analyze_batch(
+                analyzed, input_tokens, output_tokens = await self.researcher.analyze_batch(
                     story_contexts,
                     max_concurrent=min(3, self.config.max_workers),
                 )
                 stats.analyzed = len(analyzed)
+                stats.input_tokens = input_tokens
+                stats.output_tokens = output_tokens
 
                 # Save results and generate embeddings
                 to_notify = []
@@ -328,8 +352,9 @@ class Pipeline:
 
         stats.duration = time.time() - start
         logger.info(
-            "Pipeline done | duration=%.1fs important=%d notified=%d errors=%d",
-            stats.duration, stats.important, stats.notified, stats.errors
+            "Pipeline done | duration=%.1fs important=%d notified=%d errors=%d tokens=%d/%d",
+            stats.duration, stats.important, stats.notified, stats.errors,
+            stats.input_tokens, stats.output_tokens
         )
         clear_context()
         return stats

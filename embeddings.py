@@ -17,6 +17,7 @@ Usage:
 """
 
 import logging
+import time
 
 import numpy as np
 
@@ -52,9 +53,11 @@ class EmbeddingModel:
         """Lazily load the sentence-transformers model."""
         if self._model is None:
             logger.info("Loading embedding model: %s", self.model_name)
+            start_time = time.time()
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self.model_name)
-            logger.info("Embedding model loaded | dim=%d", self.dim)
+            elapsed = time.time() - start_time
+            logger.info("Embedding model loaded | dim=%d time=%.1fs", self.dim, elapsed)
         return self._model
 
     def encode(self, text: str) -> np.ndarray:

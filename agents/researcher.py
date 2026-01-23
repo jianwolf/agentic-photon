@@ -326,20 +326,19 @@ class ResearcherAgent:
         self._agent = _create_agent(config.researcher_model)
         self._context = ResearchContext(language=config.language)
 
-    async def analyze(self, story_context: StoryContext) -> ResearchReport:
+    async def analyze(self, story_context: StoryContext) -> tuple[ResearchReport, int, int]:
         """Analyze a story with pre-fetched context.
 
         Args:
             story_context: StoryContext with story and all pre-fetched information
 
         Returns:
-            Research report with summary and analysis
+            Tuple of (research report, input_tokens, output_tokens)
         """
         story = story_context.story
         message = _build_user_message(story_context)
 
         try:
-            logger.info("Analysis started | title=%s", story.title[:60])
             result = await self._agent.run(
                 message,
                 deps=self._context,
@@ -347,24 +346,25 @@ class ResearcherAgent:
             )
             # Log token usage
             usage = result.usage()
+            input_tokens = usage.request_tokens or 0
+            output_tokens = usage.response_tokens or 0
             logger.info(
-                "Analysis complete | title=%s chars=%d requests=%d input_tokens=%d output_tokens=%d",
+                "Analysis complete | title=%s chars=%d input_tokens=%d output_tokens=%d",
                 story.title[:50],
                 len(result.output.summary),
-                usage.requests,
-                usage.request_tokens or 0,
-                usage.response_tokens or 0,
+                input_tokens,
+                output_tokens,
             )
-            return result.output
+            return result.output, input_tokens, output_tokens
         except Exception as e:
             logger.error("Analysis failed for '%s...': %s | type=%s", story.title[:50], e, type(e).__name__, exc_info=True)
-            return ResearchReport.empty(reason=f"Analysis error ({type(e).__name__}): {e}")
+            return ResearchReport.empty(reason=f"Analysis error ({type(e).__name__}): {e}"), 0, 0
 
     async def analyze_batch(
         self,
         story_contexts: list[StoryContext],
         max_concurrent: int = 3,
-    ) -> list[tuple[Story, ResearchReport]]:
+    ) -> tuple[list[tuple[Story, ResearchReport]], int, int]:
         """Analyze multiple stories concurrently.
 
         Args:
@@ -372,10 +372,12 @@ class ResearcherAgent:
             max_concurrent: Max concurrent API calls
 
         Returns:
-            List of (story, report) tuples
+            Tuple of (list of (story, report) tuples, total_input_tokens, total_output_tokens)
         """
         total = len(story_contexts)
         completed = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
         semaphore = asyncio.Semaphore(max_concurrent)
 
         logger.info("Batch analysis started | total=%d max_concurrent=%d", total, max_concurrent)
@@ -383,25 +385,33 @@ class ResearcherAgent:
         async def analyze_one(
             index: int,
             story_ctx: StoryContext,
-        ) -> tuple[Story, ResearchReport]:
-            nonlocal completed
+        ) -> tuple[Story, ResearchReport, int, int]:
+            nonlocal completed, total_input_tokens, total_output_tokens
             async with semaphore:
-                logger.info("Processing story %d/%d | title=%s", index + 1, total, story_ctx.story.title[:50])
-                result = await self.analyze(story_ctx)
+                logger.debug("Processing story %d/%d | title=%s", index + 1, total, story_ctx.story.title[:50])
+                report, input_tokens, output_tokens = await self.analyze(story_ctx)
+                total_input_tokens += input_tokens
+                total_output_tokens += output_tokens
                 completed += 1
                 logger.info("Progress: %d/%d complete (%.0f%%)", completed, total, completed / total * 100)
-                return story_ctx.story, result
+                return story_ctx.story, report, input_tokens, output_tokens
 
         tasks = [analyze_one(i, ctx) for i, ctx in enumerate(story_contexts)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         output = []
+        errors = 0
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error("Batch analysis error for story %d: %s", i, result, exc_info=result)
                 output.append((story_contexts[i].story, ResearchReport.empty()))
+                errors += 1
             else:
-                output.append(result)
+                story, report, _, _ = result
+                output.append((story, report))
 
-        logger.info("Batch analysis complete | total=%d errors=%d", total, sum(1 for r in results if isinstance(r, Exception)))
-        return output
+        logger.info(
+            "Batch analysis complete | total=%d errors=%d input_tokens=%d output_tokens=%d",
+            total, errors, total_input_tokens, total_output_tokens
+        )
+        return output, total_input_tokens, total_output_tokens

@@ -532,21 +532,25 @@ class Database:
         rankings = []
 
         # BM25 search
+        bm25_count = 0
         try:
             bm25_results = self._bm25_search(query, limit=limit * 2, days=days)
+            bm25_count = len(bm25_results)
             if bm25_results:
                 rankings.append(bm25_results)
-                logger.debug("BM25 results | count=%d", len(bm25_results))
+            logger.debug("BM25 results | count=%d", bm25_count)
         except Exception as e:
-            logger.warning("BM25 search failed: %s", e)
+            logger.warning("BM25 search failed, using vector-only: %s", e)
 
         # Vector search (if embedding provided)
+        vector_count = 0
         if query_embedding is not None:
             try:
                 vector_results = self._vector_search(query_embedding, limit=limit * 2, days=days)
+                vector_count = len(vector_results)
                 if vector_results:
                     rankings.append(vector_results)
-                    logger.debug("Vector results | count=%d", len(vector_results))
+                logger.debug("Vector results | count=%d", vector_count)
             except Exception as e:
                 logger.warning("Vector search failed: %s", e)
 
