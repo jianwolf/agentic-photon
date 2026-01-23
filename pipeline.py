@@ -164,6 +164,14 @@ class Pipeline:
                 stats.duration = time.time() - start
                 return stats
 
+            # Apply max_stories limit BEFORE classification
+            # Only process (classify + save) the limited number of stories
+            if max_stories > 0 and len(new_stories) > max_stories:
+                # Sort by pub_date descending (latest first) and take top N
+                new_stories.sort(key=lambda s: s.pub_date, reverse=True)
+                new_stories = new_stories[:max_stories]
+                logger.info("Limited to %d latest stories for processing", max_stories)
+
             # Classify
             classified = await self.classifier.classify_batch(
                 new_stories,
@@ -174,16 +182,6 @@ class Pipeline:
             important = [(s, c) for s, c in classified if c.is_important]
             not_important = [(s, c) for s, c in classified if not c.is_important]
             stats.important = len(important)
-
-            # Limit important stories if max_stories is set
-            if max_stories > 0 and len(important) > max_stories:
-                # Sort by pub_date descending (latest first) and take top N
-                important.sort(key=lambda x: x[0].pub_date, reverse=True)
-                skipped_important = important[max_stories:]
-                important = important[:max_stories]
-                # Move skipped important stories to not_important (save without analysis)
-                not_important.extend(skipped_important)
-                logger.info("Limited to %d latest important stories (skipped %d)", max_stories, len(skipped_important))
 
             logger.info("Classification complete | important=%d skip=%d", len(important), len(not_important))
 

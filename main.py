@@ -66,8 +66,8 @@ def cmd_run(args: argparse.Namespace, config: Config) -> int:
         logger.info("Starting MLX server for classifier | model=%s port=%d", classifier_model, mlx_port)
         mlx_server = MLXServerManager(model=classifier_model, port=mlx_port)
         mlx_server.start()  # Blocks until server is ready
-        # Update config to use local classifier
-        config.classifier_model = f"openai:local@http://127.0.0.1:{mlx_port}/v1"
+        # Update config to use local classifier (format: openai:{model_name}@{base_url})
+        config.classifier_model = f"openai:{classifier_model}@http://127.0.0.1:{mlx_port}/v1"
 
     try:
         if args.continuous:

@@ -20,8 +20,9 @@ import logging
 from dataclasses import dataclass
 
 from openai import AsyncOpenAI
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, PromptedOutput, RunContext
 from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from config import Config
@@ -117,11 +118,20 @@ class ClassifierContext:
     language: str = "en"
 
 
+def _parse_local_model(model_str: str) -> tuple[str, str] | None:
+    """Parse local model string into (model_name, base_url) or None if not local."""
+    if model_str.startswith("openai:") and "@" in model_str:
+        rest = model_str[7:]  # Remove "openai:" prefix
+        model_name, base_url = rest.split("@", 1)
+        return model_name, base_url
+    return None
+
+
 def _create_model(model_str: str):
     """Create the appropriate model based on the model string.
 
     Supports:
-    - Local MLX models: 'openai:local@http://127.0.0.1:8080/v1'
+    - Local MLX models: 'openai:{model_name}@http://127.0.0.1:8080/v1'
     - Remote models: 'google-gla:gemini-3-flash-preview'
 
     Args:
@@ -130,15 +140,18 @@ def _create_model(model_str: str):
     Returns:
         PydanticAI model instance or model string
     """
-    if model_str.startswith("openai:local@"):
-        # Local model via OpenAI-compatible server
-        base_url = model_str.split("@", 1)[1]
-        logger.info("Using local MLX model | base_url=%s", base_url)
+    parsed = _parse_local_model(model_str)
+    if parsed:
+        model_name, base_url = parsed
+        logger.info("Using local MLX model | model=%s base_url=%s", model_name, base_url)
         # Local models don't need authentication - use placeholder
         client = AsyncOpenAI(base_url=base_url, api_key="local-model")
+        # MLX server doesn't support response_format or tool_choice
+        profile = OpenAIModelProfile(supports_json_object_output=False)
         return OpenAIModel(
-            model_name="local",  # MLX server ignores this
+            model_name=model_name,
             provider=OpenAIProvider(openai_client=client),
+            profile=profile,
         )
     else:
         # Remote model (Gemini, OpenAI, etc.)
@@ -164,7 +177,8 @@ def _create_agent(model: str) -> Agent[ClassifierContext, ClassificationResult]:
 
     agent = Agent(
         model_instance,
-        output_type=ClassificationResult,
+        # Use PromptedOutput for local models that don't support tool_choice
+        output_type=PromptedOutput(ClassificationResult),
         system_prompt=CLASSIFIER_PROMPTS["en"],  # Default fallback
         retries=3,
     )
@@ -207,8 +221,70 @@ class ClassifierAgent:
             config: Application configuration with model and language settings
         """
         self.config = config
-        self._agent = _create_agent(config.classifier_model)
         self._context = ClassifierContext(language=config.language)
+
+        # Check if using local model (needs special handling)
+        self._local_model = _parse_local_model(config.classifier_model)
+        if self._local_model:
+            model_name, base_url = self._local_model
+            self._client = AsyncOpenAI(base_url=base_url, api_key="local-model")
+            self._agent = None  # Not used for local models
+        else:
+            self._client = None
+            self._agent = _create_agent(config.classifier_model)
+
+    async def _classify_local(self, story: Story) -> ClassificationResult:
+        """Classify using local MLX model with direct API call.
+
+        The local Ministral model doesn't support system messages or
+        consecutive messages of the same role, so we use a single
+        user message with embedded instructions.
+        """
+        model_name, _ = self._local_model
+        publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
+
+        # Get the detailed system prompt based on language setting
+        system_prompt = CLASSIFIER_PROMPTS.get(self._context.language, CLASSIFIER_PROMPTS["en"])
+
+        # Single user message with full instructions embedded (no system message)
+        prompt = f"""{system_prompt}
+
+---
+
+Classify the following news story. Output ONLY valid JSON with these fields:
+- is_important: boolean
+- confidence: number 0-1
+- category: one of [politics, economics, business, technology, ai_ml, research, security, entertainment, sports, lifestyle, other]
+- reasoning: brief explanation (1-2 sentences)
+
+Title: {story.title}
+Publisher: {publishers}
+Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
+
+JSON:"""
+
+        resp = await self._client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+        )
+
+        content = resp.choices[0].message.content.strip()
+        # Extract JSON from response (handle markdown fencing)
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        content = content.strip()
+
+        import json
+        data = json.loads(content)
+        return ClassificationResult(
+            is_important=data.get("is_important", True),
+            confidence=data.get("confidence", 0.5),
+            category=ImportanceCategory(data.get("category", "other")),
+            reasoning=data.get("reasoning", ""),
+        )
 
     async def classify(self, story: Story) -> ClassificationResult:
         """Classify a single story.
@@ -219,12 +295,18 @@ class ClassifierAgent:
         Returns:
             Classification result
         """
-        publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
-        message = f"""Title: {story.title}
+        try:
+            if self._local_model:
+                result = await self._classify_local(story)
+                logger.debug("Classified: %s... -> %s", story.title[:50], result.is_important)
+                return result
+
+            # Use pydantic-ai agent for remote models
+            publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
+            message = f"""Title: {story.title}
 Publisher: {publishers}
 Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
 
-        try:
             result = await self._agent.run(message, deps=self._context)
             usage = result.usage()
             logger.debug(
