@@ -61,7 +61,7 @@ All settings via environment variables:
 |----------|---------|-------------|
 | `GEMINI_API_KEY` | **required** | Google Gemini API key |
 | `LANGUAGE` | `zh` | Output language (`zh` or `en`) |
-| `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for classification |
+| `CLASSIFIER_MODEL` | Local MLX model | Model for classification (default: Ministral-3B via mlx-lm) |
 | `RESEARCHER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for analysis |
 | `MAX_AGE_HOURS` | `720` | Max story age (30 days) |
 | `POLL_INTERVAL_SECONDS` | `300` | Polling interval (5 min) |

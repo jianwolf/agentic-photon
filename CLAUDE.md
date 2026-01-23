@@ -99,7 +99,7 @@ RSS Feeds (17 sources)
 GEMINI_API_KEY=your-api-key
 
 # === Models (PydanticAI format) ===
-CLASSIFIER_MODEL=google-gla:gemini-3-flash-preview
+# CLASSIFIER_MODEL uses local MLX model by default (Ministral-3B)
 RESEARCHER_MODEL=google-gla:gemini-3-flash-preview
 
 # === Output ===
