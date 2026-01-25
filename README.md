@@ -2,6 +2,15 @@
 
 An intelligent news analysis pipeline powered by PydanticAI agents. Monitors RSS feeds from curated tech/AI sources, classifies stories by importance, and generates detailed analysis reports.
 
+## MLE Portfolio
+
+Concrete ML engineering artifacts live in-repo so you can trace data -> evaluation -> monitoring:
+
+- Data labeling workflow and schema: `data/README.md`, `data/label_schema.json`, and curated labels in `data/labels/`.
+- Evaluation harnesses for classification + retrieval: `eval/README.md` (can write metrics JSON and optional per-query details).
+- Ablation tracking, model card, and latency benchmarks: `docs/ablation.md`, `docs/model_card.md`, `docs/benchmarks.md`.
+- Monitoring snapshot tooling: `eval/monitoring_report.py` (important rate and top sources).
+
 ## Technical Highlights
 
 This project demonstrates several engineering decisions optimized for **cost efficiency**, **consistency**, and **simplicity**:
@@ -13,7 +22,8 @@ This project demonstrates several engineering decisions optimized for **cost eff
 | **Retrieval quality** | Hybrid RAG (BM25 + Vector + RRF) | Combines keyword precision with semantic recall |
 | **Vector search at scale** | Exact NN over SQLite | ANN complexity unjustified for <2K vectors |
 | **Research depth vs cost** | Single Gemini call with grounding | 1 API call vs 5-15 with tool round-trips |
-| **Deduplication** | SHA-256 hash of (title + source) | O(1) lookup, collision-resistant |
+| **Deduplication** | SHA-256 hash of (normalized title + pub hour + source feed) | O(1) lookup, collision-resistant |
+| **Evaluation rigor** | Label schema + seed/gold sets + eval harness | Reproducible metrics, ablations, and benchmarks |
 | **Fail-safe classification** | Default to important on error | Never miss potentially important stories |
 
 ## Features
@@ -24,7 +34,8 @@ This project demonstrates several engineering decisions optimized for **cost eff
 - **Deep Analysis**: Research agent with Gemini + Google Search grounding (no custom tool round-trips)
 - **Flexible Output**: Markdown reports, webhooks, and JSONL alerts
 - **Bilingual Support**: Chinese (zh) and English (en) with language-specific prompts
-- **Optional Enhancements**: Vector memory (ChromaDB) and observability (Logfire)
+- **Optional Observability**: Logfire tracing (OpenTelemetry)
+- **Evaluation Toolkit**: Label schema, classification/retrieval evals, ablations, model card, benchmarks
 
 ## Quick Start
 
@@ -56,6 +67,33 @@ python main.py run -c
 python main.py run -c --interval 600
 ```
 
+Note: `main.py run` starts a local MLX classifier by default (Apple Silicon). For non-Apple platforms, use the programmatic pipeline with `CLASSIFIER_MODEL` set to a remote model.
+
+## MLE Workflows (Evaluation & Benchmarking)
+
+```bash
+# Build or refresh a labeling pool
+python data/collect_label_pool.py --max-age-hours 168 --max-items 200 --out data/labels/pool.jsonl
+
+# Extract a manual-only gold set from the seed labels
+python data/extract_gold_labels.py --input data/labels/seed.jsonl --out data/labels/gold.jsonl
+
+# Classification evaluation (remote model by default)
+python eval/classification_eval.py --labels data/labels/seed.jsonl --out-metrics eval/metrics_seed.json
+
+# Local MLX evaluation (Apple Silicon)
+python eval/classification_eval.py --labels data/labels/gold.jsonl --mlx-model mlx-community/Ministral-3-3B-Instruct-2512
+
+# Retrieval evaluation
+python data/build_retrieval_queries.py --db-path news.db --out eval/queries.jsonl --query-mode title_summary
+python eval/retrieval_eval.py --db-path news.db --queries eval/queries.jsonl --mode hybrid --out-details eval/retrieval_details.jsonl
+
+# Benchmarks + monitoring snapshot
+python eval/benchmark.py --labels data/labels/sample.jsonl --db-path news.db --out eval/benchmarks.json
+python eval/classifier_benchmark.py --labels data/labels/seed.jsonl --max-items 50 --out eval/classifier_benchmark.json
+python eval/monitoring_report.py --db-path news.db --days 7
+```
+
 ## CLI Commands
 
 | Command | Description |
@@ -77,19 +115,25 @@ All settings via environment variables:
 |----------|---------|-------------|
 | `GEMINI_API_KEY` | **required** | Google Gemini API key |
 | `LANGUAGE` | `zh` | Output language (`zh` or `en`) |
-| `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for classification (overridden by `--classifier-model` CLI arg) |
+| `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Classifier model for programmatic runs (CLI uses MLX by default) |
 | `RESEARCHER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for analysis |
 | `MAX_AGE_HOURS` | `720` | Max story age (30 days) |
 | `POLL_INTERVAL_SECONDS` | `300` | Polling interval (5 min) |
+| `PRUNE_AFTER_DAYS` | `30` | Auto-delete older records |
+| `MAX_WORKERS` | `8` | Concurrency for feed fetches and API calls |
+| `MAX_RETRIES` | `3` | Retry attempts for API calls |
+| `RETRY_BASE_DELAY` | `1.0` | Base delay for exponential backoff |
 | `DB_PATH` | `news.db` | SQLite database path |
 | `REPORTS_DIR` | `reports` | Markdown reports directory |
+| `LOG_DIR` | `log` | Log file directory |
 | `NOTIFICATION_WEBHOOK_URL` | | Optional webhook URL |
 | `ALERTS_FILE` | | Optional JSONL alerts file |
-| `ENABLE_MEMORY` | `false` | Enable ChromaDB vector store |
 | `ENABLE_LOGFIRE` | `false` | Enable Logfire tracing |
-| `GOOGLE_API_KEY` | | Google Custom Search API key (enables web search) |
-| `GOOGLE_CSE_ID` | | Google Custom Search Engine ID |
-| `SERPAPI_KEY` | | SerpAPI key (alternative search backend) |
+| `LOG_LEVEL` | `INFO` | Console log level |
+| `LOG_FORMAT` | `text` | Log format (`text` or `json`) |
+| `LOG_BACKUP_COUNT` | `30` | Rotated log files to keep |
+| `LOG_MAX_BYTES` | `0` | Max log file size (0 = time-based rotation) |
+| `LOGFIRE_TOKEN` | | Optional Logfire auth token |
 
 ## Architecture (v2 - Grounded)
 
@@ -97,7 +141,7 @@ All settings via environment variables:
 RSS Feeds (17 sources)
        │
        ▼
-  Async Fetch ──► Dedup ──► Classifier (Local LLM)
+  Async Fetch ──► Dedup ──► Classifier (Local MLX or remote LLM)
                                │
                  ┌─────────────┴─────────────┐
                  │                           │
@@ -145,8 +189,8 @@ RRF formula: `score = Σ 1/(k + rank)` where k=60 (standard). It's robust, requi
 
 Vector search uses exact nearest neighbor (brute-force cosine similarity) rather than approximate nearest neighbor (HNSW, IVF, etc.):
 
-- **Scale**: ~300-1500 vectors (30 days × 10-50 important stories/day)
-- **Speed**: <1ms for 1000 vectors — fast enough
+- **Scale**: Low thousands of vectors with 30-day retention (configurable)
+- **Speed**: Acceptable for local workloads; see `docs/benchmarks.md`
 - **Accuracy**: 100% recall (no approximation loss)
 - **Simplicity**: Zero dependencies (no FAISS, Annoy, sqlite-vec)
 
@@ -156,8 +200,8 @@ For this scale, exact NN is the right choice. ANN adds complexity without meanin
 
 | Model | Dimensions | Speed | Quality | Choice |
 |-------|------------|-------|---------|--------|
-| BGE-small-en-v1.5 | 384 | ~5ms/embed | Good | ✅ |
-| BGE-base | 768 | ~15ms/embed | Better | ❌ Overkill |
+| BGE-small-en-v1.5 | 384 | Fast on CPU (see `docs/benchmarks.md`) | Good | ✅ |
+| BGE-base | 768 | Slower | Better | ❌ Overkill |
 | OpenAI ada-002 | 1536 | API latency + cost | Best | ❌ Defeats local-first goal |
 
 For news similarity (not fine-grained semantic search), BGE-small provides sufficient quality at 3x speed.
@@ -173,12 +217,13 @@ agentic-photon/
 │   ├── story.py            # RSS story model
 │   ├── classification.py   # Classification result
 │   └── research.py         # Research report
-├── tools/                  # Agent tools
-│   ├── search.py           # Web search (Google CSE or SerpAPI)
+├── tools/                  # Agent tools (legacy or supporting)
+│   ├── search.py           # Legacy web search (not wired into pipeline)
 │   ├── fetch.py            # Article fetcher
 │   └── database.py         # History queries
-├── memory/                 # Optional features
-│   └── vector_store.py     # ChromaDB semantic search
+├── data/                   # Labeling pipeline and schema
+├── eval/                   # Evaluation and benchmarking scripts
+├── docs/                   # Model card, ablations, benchmarks
 ├── observability/
 │   ├── logging.py          # Enhanced logging with JSON/context
 │   └── tracing.py          # Logfire integration
@@ -193,10 +238,10 @@ agentic-photon/
 
 ## Local MLX Classification (Apple Silicon)
 
-By default, the pipeline uses a local MLX model (Ministral-3B) for classification, which runs entirely on-device using Apple Silicon. This reduces API costs and latency.
+By default, `python main.py run` uses a local MLX model (Ministral-3B) for classification, which runs entirely on-device using Apple Silicon. This reduces API costs and latency. For non-Apple platforms, use the programmatic pipeline with `CLASSIFIER_MODEL` set to a remote model.
 
 ```bash
-# Default: uses Ministral-3B-Instruct
+# Default: uses mlx-community/Ministral-3-3B-Instruct-2512
 python main.py run
 
 # Custom MLX model
@@ -210,7 +255,7 @@ Requirements:
 - macOS 15.0+ with Apple Silicon (M-series Chips)
 - mlx-lm package: `pip install mlx-lm`
 
-The first run will download the model (~2GB). The MLX server starts automatically and shuts down when the pipeline exits.
+The first run will download the model (~2GB). The MLX server starts automatically and shuts down when the pipeline exits. If you want a remote classifier instead, run the `Pipeline` programmatically with `CLASSIFIER_MODEL` and skip the MLX CLI path.
 
 ### Consistency Optimizations for Small Models
 
@@ -278,15 +323,6 @@ The pipeline follows a **fail-safe, continue-on-error** philosophy:
 This design prioritizes **availability over correctness** — appropriate for a monitoring system where missing data is worse than imperfect data.
 
 ## Optional Features
-
-### Vector Memory (ChromaDB)
-
-Enable semantic search across story history:
-
-```bash
-pip install chromadb
-export ENABLE_MEMORY=true
-```
 
 ### Observability (Logfire)
 
