@@ -43,7 +43,9 @@ MAX_DESCRIPTION_CHARS = 2000
 # Context is now provided in the user message, not via tools.
 
 RESEARCHER_PROMPTS = {
-    "zh": """你是一名资深新闻研究员和事实核查专家，具备深度分析和批判性思维能力。
+    "zh": """【语言要求】所有输出内容必须使用中文撰写。技术术语（如AI、LLM、API等）可保留英文。
+
+你是一名资深新闻研究员和事实核查专家，具备深度分析和批判性思维能力。
 
 ## 你将收到的信息
 
@@ -72,28 +74,28 @@ RESEARCHER_PROMPTS = {
 - 标注无法验证的内容
 - 保持客观，明确区分事实与分析
 
-## 输出要求
+## 输出要求（必须用中文）
 
-### summary（约800字）
+### summary（约800字，中文）
 结构：
 1. 导语（1-2句）：核心新闻事实
 2. 背景（1-2段）：为什么这件事重要
 3. 详细分析（2-3段）：深入解读
 4. 影响展望（1段）：可能的后续发展
 
-### thought
+### thought（中文）
 记录你的分析过程：
 - 使用了哪些搜索查询
 - 哪些声明得到了验证，哪些无法确认
 - 来源的可信度评估
 - 是否发现矛盾信息
 
-### key_points（3-5条）
+### key_points（3-5条，中文）
 - 每条应独立成立，有实际意义
 - 避免与summary重复
 - 侧重"这意味着什么"而非仅"发生了什么"
 
-### related_topics
+### related_topics（中文）
 - 值得后续关注的相关话题
 - 可能的发展方向
 
@@ -101,7 +103,9 @@ RESEARCHER_PROMPTS = {
 - 当信息不完整时，明确说明而非猜测
 - 来源冲突时，呈现多方观点并注明
 - 搜索无结果时，说明"未找到相关信息"
-- 保持专业客观，避免主观臆断""",
+- 保持专业客观，避免主观臆断
+
+【再次提醒】你的所有输出（summary、thought、key_points、related_topics）必须使用中文。""",
 
     "en": """You are a senior news researcher and fact-checker with deep analytical and critical thinking capabilities.
 
@@ -228,11 +232,12 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     return agent
 
 
-def _build_user_message(ctx: StoryContext) -> str:
+def _build_user_message(ctx: StoryContext, language: str = "en") -> str:
     """Build the user message with all pre-fetched context.
 
     Args:
         ctx: StoryContext with all gathered information
+        language: Output language ('zh' or 'en')
 
     Returns:
         Formatted message string for the researcher
@@ -240,54 +245,93 @@ def _build_user_message(ctx: StoryContext) -> str:
     story = ctx.story
     publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
 
+    # Language-specific templates
+    if language == "zh":
+        templates = {
+            "analyze": "请分析以下新闻：",
+            "story_info": "## 新闻信息",
+            "title": "标题",
+            "publisher": "来源",
+            "published": "发布时间",
+            "category": "分类",
+            "classification": "分类说明",
+            "description": "## RSS摘要",
+            "no_description": "无摘要",
+            "article_header": "## 文章全文",
+            "article_unavailable": "（文章内容获取失败。请根据摘要分析，并使用网络搜索验证。）",
+            "truncated": "... [已截断]",
+            "related_header": "## 相关历史报道（来自数据库）",
+            "no_related": "数据库中未找到相关报道。这可能是一个新话题。",
+            "instructions": "## 分析要求",
+            "instruction_list": """1. 阅读并理解提供的内容
+2. 使用网络搜索验证关键声明并获取最新背景
+3. 结合相关历史报道进行分析
+4. 按照输出格式提供完整分析
+
+【重要】请用中文撰写所有输出内容。""",
+        }
+    else:
+        templates = {
+            "analyze": "Analyze this news story:",
+            "story_info": "## Story Information",
+            "title": "Title",
+            "publisher": "Publisher",
+            "published": "Published",
+            "category": "Category",
+            "classification": "Classification",
+            "description": "## RSS Description",
+            "no_description": "No description available",
+            "article_header": "## Full Article Content",
+            "article_unavailable": "(Article content could not be fetched. Analyze based on the description and use web search for verification.)",
+            "truncated": "... [truncated]",
+            "related_header": "## Related Past Coverage (from our database)",
+            "no_related": "No related stories found in our database. This may be a new topic.",
+            "instructions": "## Instructions",
+            "instruction_list": """1. Read and understand the provided content
+2. Use web search to verify key claims and gather current context
+3. Consider the historical context from related stories
+4. Provide a comprehensive analysis following the output structure""",
+        }
+
     # Build classification context
     classification_lines = []
     if ctx.classification:
-        classification_lines.append(f"Category: {ctx.classification.category.value}")
+        classification_lines.append(f"{templates['category']}: {ctx.classification.category.value}")
         if ctx.classification.reasoning:
-            classification_lines.append(f"Classification: {ctx.classification.reasoning}")
+            classification_lines.append(f"{templates['classification']}: {ctx.classification.reasoning}")
     classification_context = "\n".join(classification_lines)
 
     # Build article content section
     if ctx.article_content:
         content = ctx.article_content[:MAX_ARTICLE_CONTENT_CHARS]
-        truncated = "... [truncated]" if len(ctx.article_content) > MAX_ARTICLE_CONTENT_CHARS else ""
-        article_section = f"## Full Article Content\n{content}{truncated}"
+        truncated = templates["truncated"] if len(ctx.article_content) > MAX_ARTICLE_CONTENT_CHARS else ""
+        article_section = f"{templates['article_header']}\n{content}{truncated}"
     else:
-        article_section = (
-            "## Full Article Content\n"
-            "(Article content could not be fetched. Analyze based on the "
-            "description and use web search for verification.)"
-        )
+        article_section = f"{templates['article_header']}\n{templates['article_unavailable']}"
 
     # Build related stories section
     if ctx.related_stories and ctx.related_stories != "No related stories found in database.":
-        related_section = f"""## Related Past Coverage (from our database)
-{ctx.related_stories}"""
+        related_section = f"{templates['related_header']}\n{ctx.related_stories}"
     else:
-        related_section = """## Related Past Coverage
-No related stories found in our database. This may be a new topic."""
+        related_section = f"{templates['related_header']}\n{templates['no_related']}"
 
-    message = f"""Analyze this news story:
+    message = f"""{templates['analyze']}
 
-## Story Information
-Title: {story.title}
-Publisher: {publishers}
-Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
+{templates['story_info']}
+{templates['title']}: {story.title}
+{templates['publisher']}: {publishers}
+{templates['published']}: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
 {classification_context}
 
-## RSS Description
-{story.description[:MAX_DESCRIPTION_CHARS] if story.description else "No description available"}
+{templates['description']}
+{story.description[:MAX_DESCRIPTION_CHARS] if story.description else templates['no_description']}
 
 {article_section}
 
 {related_section}
 
-## Instructions
-1. Read and understand the provided content
-2. Use web search to verify key claims and gather current context
-3. Consider the historical context from related stories
-4. Provide a comprehensive analysis following the output structure"""
+{templates['instructions']}
+{templates['instruction_list']}"""
 
     return message
 
@@ -336,7 +380,7 @@ class ResearcherAgent:
             Tuple of (research report, input_tokens, output_tokens)
         """
         story = story_context.story
-        message = _build_user_message(story_context)
+        message = _build_user_message(story_context, language=self._context.language)
 
         try:
             result = await self._agent.run(

@@ -207,7 +207,7 @@ python main.py run --mlx-port 8081
 ```
 
 Requirements:
-- macOS 15.0+ with Apple Silicon (M1/M2/M3)
+- macOS 15.0+ with Apple Silicon (M-series Chips)
 - mlx-lm package: `pip install mlx-lm`
 
 The first run will download the model (~2GB). The MLX server starts automatically and shuts down when the pipeline exits.
