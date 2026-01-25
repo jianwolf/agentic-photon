@@ -47,11 +47,20 @@ CLASSIFIER_PROMPTS = {
 - 经济与金融：重大市场波动、央行决策、企业并购、经济指标
 - 科技突破：AI/ML研究进展、重大产品发布、安全漏洞、监管变化
 - 社会影响：影响广泛人群的事件、公共卫生、基础设施
+- **主要AI公司的产品发布**：OpenAI、Google、Anthropic、Meta、NVIDIA等公司的新产品、新功能、新模型发布（如ChatGPT新功能、Gemini更新、Claude新版本、Veo视频模型等）
+- **AI进入新领域**：AI应用于医疗、法律、教育等垂直领域的重大进展（如ChatGPT Health、医疗AI等）
+- **行业竞争分析**：关于主要科技/AI公司之间竞争格局、市场地位变化的深度分析
+- **AI行业预测与趋势**：对AI/ML行业发展方向的预测、年度总结、趋势分析
+- **科技/AI主题的定期专栏**：如"The Pulse"、"AI Weekly"等专注于AI/编程/科技的定期专栏或newsletter
+- **互联网基础设施与安全**：BGP异常、DNS问题、大规模网络中断、国家级互联网封锁等
 
 **标记为不重要 (is_important=false) 的新闻：**
 - 娱乐八卦、体育赛事结果、名人动态
 - 地区性小新闻、天气预报、生活方式内容
-- 软文、广告、产品评测、榜单推荐
+- 软文、广告、客户案例研究（如"某公司如何使用ChatGPT"）、榜单推荐
+- 个人博客文章、引用汇编、个人学习笔记
+- 小型开发工具发布（除非是平台级或改变行业的工具）
+- 公司内部公告（如招聘、办公室搬迁）
 
 ## 边界情况处理
 - 科技公司的商业新闻 → 看是否涉及行业格局变化
@@ -80,11 +89,20 @@ CLASSIFIER_PROMPTS = {
 - Economics & Finance: Major market movements, central bank decisions, M&A, economic indicators
 - Technology Breakthroughs: AI/ML research advances, major product launches, security vulnerabilities, regulatory changes
 - Societal Impact: Events affecting large populations, public health, infrastructure
+- **Major AI Company Product Launches**: New products, features, or models from OpenAI, Google, Anthropic, Meta, NVIDIA, etc. (e.g., ChatGPT features, Gemini updates, Claude versions, Veo video models, etc.)
+- **AI Entering New Domains**: Major developments in AI applied to healthcare, legal, education, and other verticals (e.g., ChatGPT Health, medical AI, etc.)
+- **Industry Competitive Analysis**: Deep analysis of competition between major tech/AI companies, market position shifts
+- **AI Industry Forecasts & Trends**: Predictions about AI/ML industry direction, annual reviews, trend analysis
+- **Tech/AI-focused Newsletters & Columns**: Regular columns like "The Pulse", "AI Weekly", etc. that focus on AI/programming/tech topics
+- **Internet Infrastructure & Security**: BGP anomalies, DNS issues, large-scale outages, nation-state internet shutdowns
 
 **Mark as Not Important (is_important=false):**
 - Entertainment gossip, sports scores, celebrity news
 - Local small news, weather forecasts, lifestyle content
-- Sponsored content, advertisements, product reviews, listicles
+- Sponsored content, advertisements, customer case studies (e.g., "How X company uses ChatGPT"), listicles
+- Personal blog posts, quote compilations, personal learning notes
+- Small developer tool releases (unless platform-level or industry-changing)
+- Company internal announcements (hiring, office moves, etc.)
 
 ## Edge Case Handling
 - Tech company business news → Consider if it changes industry landscape
@@ -240,6 +258,10 @@ class ClassifierAgent:
         The local Ministral model doesn't support system messages or
         consecutive messages of the same role, so we use a single
         user message with embedded instructions.
+
+        Uses low temperature (0.1) and top_p (0.1) for deterministic,
+        consistent classification results. Chain-of-thought prompting
+        improves reasoning quality.
         """
         model_name, _ = self._local_model
         publishers = ", ".join(story.publishers) if story.publishers else "Unknown"
@@ -248,11 +270,19 @@ class ClassifierAgent:
         system_prompt = CLASSIFIER_PROMPTS.get(self._context.language, CLASSIFIER_PROMPTS["en"])
 
         # Single user message with full instructions embedded (no system message)
+        # Uses chain-of-thought: first analyze, then conclude
         prompt = f"""{system_prompt}
 
 ---
 
-Classify the following news story. Output ONLY valid JSON with these fields:
+Classify the following news story. Think step-by-step:
+
+1. First, identify the main topic and source type
+2. Check if it matches any "Important" criteria
+3. Check if it matches any "Not Important" criteria
+4. Make your final decision
+
+Then output ONLY valid JSON with these fields:
 - is_important: boolean
 - confidence: number 0-1
 - category: one of [politics, economics, business, technology, ai_ml, research, security, entertainment, sports, lifestyle, other]
@@ -262,23 +292,47 @@ Title: {story.title}
 Publisher: {publishers}
 Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
 
-JSON:"""
+Step-by-step analysis and JSON:"""
 
         resp = await self._client.chat.completions.create(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,  # Low temperature for deterministic output
+            top_p=0.1,  # Restrictive nucleus sampling for consistency
             stream=False,
         )
 
         content = resp.choices[0].message.content.strip()
-        # Extract JSON from response (handle markdown fencing)
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        content = content.strip()
+        # Extract JSON from response (handle chain-of-thought + markdown fencing)
+        # The model may output analysis text before the JSON
+        json_str = None
 
-        data = json.loads(content)
+        # Try to find JSON in markdown code fence first
+        if "```json" in content:
+            json_str = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            # Try generic code fence
+            parts = content.split("```")
+            for part in parts[1::2]:  # Check odd-indexed parts (inside fences)
+                part = part.strip()
+                if part.startswith("json"):
+                    part = part[4:].strip()
+                if part.startswith("{"):
+                    json_str = part
+                    break
+
+        # If no code fence, find raw JSON object
+        if not json_str:
+            # Find the last JSON object in the response (after analysis)
+            start = content.rfind("{")
+            end = content.rfind("}") + 1
+            if start != -1 and end > start:
+                json_str = content[start:end]
+
+        if not json_str:
+            raise ValueError(f"No JSON found in response: {content[:200]}")
+
+        data = json.loads(json_str)
         return ClassificationResult(
             is_important=data.get("is_important", True),
             confidence=data.get("confidence", 0.5),

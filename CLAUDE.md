@@ -1,5 +1,7 @@
 # Agentic Photon - Developer Guide
 
+> **Portfolio Note**: This repository serves as a technical portfolio project demonstrating engineering expertise. When making changes, prioritize documenting technical decisions, trade-offs, and optimizations in README.md. Explain the "why" behind architectural choices.
+
 ## Overview
 
 Agentic Photon is a PydanticAI-powered news analysis pipeline that:
@@ -327,6 +329,24 @@ python main.py run --mlx-port 8081
 - `pip install mlx-lm`
 
 **Note:** Local models don't support system messages or `tool_choice`, so the classifier uses a single user message with embedded instructions.
+
+### Consistency Optimizations
+
+Small language models (3B parameters) can produce inconsistent classification results. The classifier implements three techniques to improve determinism:
+
+| Technique | Setting | Purpose |
+|-----------|---------|---------|
+| **Low Temperature** | `temperature=0.1` | Near-deterministic token selection |
+| **Restrictive Top-P** | `top_p=0.1` | Limits sampling to high-probability tokens |
+| **Chain-of-Thought** | Step-by-step prompt | Forces structured reasoning before decision |
+
+The chain-of-thought prompt asks the model to:
+1. Identify the main topic and source type
+2. Check against "Important" criteria
+3. Check against "Not Important" criteria
+4. Make final decision with reasoning
+
+This reduces classification variance compared to direct prompting.
 
 ## Error Handling
 
