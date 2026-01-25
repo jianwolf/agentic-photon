@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Photon Label Schema",
+  "type": "object",
+  "required": ["id", "title", "source_url", "pub_date", "label"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier (use Story.hash when possible)."
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "source_url": {
+      "type": "string"
+    },
+    "article_url": {
+      "type": "string"
+    },
+    "pub_date": {
+      "type": "string",
+      "description": "ISO-8601 timestamp."
+    },
+    "label": {
+      "type": ["boolean", "null"],
+      "description": "Important (true) or not important (false). Use null for unlabeled pools."
+    },
+    "category": {
+      "type": "string",
+      "description": "Optional category label (see models/classification.py)."
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

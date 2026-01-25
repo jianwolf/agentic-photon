@@ -48,6 +48,9 @@ logs/
 reports/
 alerts.jsonl
 *.jsonl
+!data/labels/sample.jsonl
+!data/labels/seed.jsonl
+!data/labels/gold.jsonl
 
 # Vector database (ChromaDB)
 vectors/
