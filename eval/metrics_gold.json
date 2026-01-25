@@ -1,0 +1,15 @@
+{
+  "total": 20,
+  "matched": 20,
+  "accuracy": 0.8,
+  "precision": 0.7333,
+  "recall": 1.0,
+  "f1": 0.8462,
+  "tp": 11,
+  "fp": 4,
+  "tn": 5,
+  "fn": 0,
+  "label_positive_rate": 0.55,
+  "prediction_positive_rate": 0.75,
+  "category_accuracy": 0.35
+}

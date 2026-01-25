@@ -1,0 +1,13 @@
+{
+  "embedding": {
+    "items": 20,
+    "total_s": 5.9916,
+    "avg_ms": 299.5823
+  },
+  "retrieval": {
+    "queries": 20,
+    "total_s": 0.8873,
+    "avg_ms": 44.3674,
+    "limit": 5
+  }
+}
