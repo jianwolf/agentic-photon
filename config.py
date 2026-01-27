@@ -10,6 +10,7 @@ Environment Variables:
     Models (PydanticAI format - provider:model):
         CLASSIFIER_MODEL: Model for quick importance classification
         RESEARCHER_MODEL: Model for deep analysis with tools
+        RESEARCHER_MODEL_PRO: Alternate researcher model for comparisons
 
     Output:
         LANGUAGE: Output language ('zh' for Chinese, 'en' for English)
@@ -124,13 +125,16 @@ def _env_bool(key: str, default: bool = False) -> bool:
 DEFAULT_RSS_URLS = [
     # === Individual Tech Bloggers ===
     # Influential voices in ML, systems, and software engineering
-    "https://karpathy.github.io/feed.xml",       # Andrej Karpathy - ML/AI
+    "https://karpathy.github.io/feed.xml",        # Andrej Karpathy - ML/AI
     "https://simonwillison.net/atom/everything/", # Simon Willison - LLMs, data
     "https://jvns.ca/atom.xml",                   # Julia Evans - systems, debugging
     "https://danluu.com/atom.xml",                # Dan Luu - systems, performance
     "https://lilianweng.github.io/index.xml",     # Lilian Weng - ML research
     "https://martinfowler.com/feed.atom",         # Martin Fowler - architecture
     "https://newsletter.pragmaticengineer.com/feed",  # Gergely Orosz - eng culture
+    "https://jalammar.github.io/feed.xml",        # Jay Alammar - illustrated ML
+    "https://www.fast.ai/atom.xml",               # Fast.ai - practical deep learning
+    "https://magazine.sebastianraschka.com/feed", # Sebastian Raschka - Ahead of AI
 
     # === AI/ML Research Labs ===
     # Official blogs from leading AI research organizations
@@ -139,6 +143,11 @@ DEFAULT_RSS_URLS = [
     "https://thegradient.pub/rss/",               # The Gradient (ML publication)
     "https://bair.berkeley.edu/blog/feed.xml",    # Berkeley AI Research
     "https://huggingface.co/blog/feed.xml",       # Hugging Face
+    "https://www.microsoft.com/en-us/research/feed/",  # Microsoft Research
+    "http://news.mit.edu/rss/topic/artificial-intelligence2",  # MIT AI news
+    "http://arxiv.org/rss/cs.LG",                 # arXiv Machine Learning
+    "http://arxiv.org/rss/cs.CL",                 # arXiv Computation & Language (NLP)
+    "https://raw.githubusercontent.com/conoro/anthropic-engineering-rss-feed/main/anthropic_engineering_rss.xml",  # Anthropic (community)
 
     # === Tech Company Engineering Blogs ===
     # Infrastructure, scale, and engineering practices
@@ -147,6 +156,23 @@ DEFAULT_RSS_URLS = [
     "https://engineering.atspotify.com/feed/",    # Spotify
     "https://blog.cloudflare.com/rss/",           # Cloudflare
     "https://tech.instacart.com/feed",            # Instacart
+    "https://aws.amazon.com/blogs/machine-learning/feed/",  # AWS Machine Learning
+    "http://feeds.feedburner.com/blogspot/gJZg",  # Google AI Blog
+    "http://feeds.feedburner.com/nvidiablog",     # NVIDIA AI
+    "https://eng.uber.com/category/articles/ai/feed/",  # Uber ML Engineering
+
+    # === AI/Tech News & Analysis ===
+    # Industry news, reviews, and journalism
+    "https://feeds.arstechnica.com/arstechnica/index",  # Ars Technica
+    "https://venturebeat.com/category/ai/feed/",  # VentureBeat AI
+    "https://www.technologyreview.com/feed/",     # MIT Technology Review
+    "https://www.404media.co/rss",                # 404 Media - tech journalism
+
+    # === Curated Newsletters ===
+    # Weekly/regular digests of AI/ML news
+    "https://lastweekin.ai/feed",                 # Last Week in AI
+    "https://www.latent.space/feed",              # Latent Space
+    "https://aisnakeoil.substack.com/feed",       # AI Snake Oil - critical analysis
 ]
 
 
@@ -176,6 +202,7 @@ class Config:
     # PydanticAI format: provider:model (e.g., 'google-gla:gemini-3-flash-preview')
     classifier_model: str = "google-gla:gemini-3-flash-preview"  # Fast classification
     researcher_model: str = "google-gla:gemini-3-flash-preview"  # Deep analysis
+    researcher_model_pro: str = "google-gla:gemini-3-pro-preview"  # Comparison model
 
     # === Story Filtering ===
     max_age_hours: int = 720  # MAX_AGE_HOURS - Skip stories older than this (30 days)
@@ -219,6 +246,7 @@ class Config:
             language=_env("LANGUAGE", "zh"),
             classifier_model=_env("CLASSIFIER_MODEL", "google-gla:gemini-3-flash-preview"),
             researcher_model=_env("RESEARCHER_MODEL", "google-gla:gemini-3-flash-preview"),
+            researcher_model_pro=_env("RESEARCHER_MODEL_PRO", "google-gla:gemini-3-pro-preview"),
             max_age_hours=_env_int("MAX_AGE_HOURS", 720),
             db_path=Path(_env("DB_PATH", "news.db")),
             prune_after_days=_env_int("PRUNE_AFTER_DAYS", 30),

@@ -110,6 +110,7 @@ def cmd_status(args: argparse.Namespace, config: Config) -> int:
             "language": config.language,
             "classifier_model": config.classifier_model,
             "researcher_model": config.researcher_model,
+            "researcher_model_pro": config.researcher_model_pro,
             "feeds": len(config.rss_urls),
             "max_age_hours": config.max_age_hours,
             "poll_interval": config.poll_interval_seconds,
@@ -242,6 +243,58 @@ def cmd_analyze(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_compare(args: argparse.Namespace, config: Config) -> int:
+    """Compare researcher models on a sample of stories.
+
+    Args:
+        args: Parsed command line arguments
+        config: Application configuration
+
+    Returns:
+        Exit code (0 for success)
+    """
+    from pathlib import Path
+    from pipeline import compare_models
+    from mlx_server import MLXServerManager
+
+    # Override config with CLI arguments
+    if args.lang:
+        config.language = args.lang
+    if args.flash_model:
+        config.researcher_model = args.flash_model
+    if args.pro_model:
+        config.researcher_model_pro = args.pro_model
+
+    output_dir = Path(args.output_dir) if args.output_dir else None
+    limit = max(1, args.limit)
+    classifier_model = getattr(args, "classifier_model", None)
+    mlx_port = getattr(args, "mlx_port", 8080)
+
+    logger = logging.getLogger(__name__)
+
+    # Optional MLX server for local classifier
+    mlx_server = None
+    if classifier_model:
+        logger.info("Starting MLX server for classifier | model=%s port=%d", classifier_model, mlx_port)
+        mlx_server = MLXServerManager(model=classifier_model, port=mlx_port)
+        mlx_server.start()  # Blocks until server is ready
+        config.classifier_model = f"openai:{classifier_model}@http://127.0.0.1:{mlx_port}/v1"
+
+    try:
+        result = asyncio.run(compare_models(config, limit=limit, output_dir=output_dir))
+        print(json.dumps(result, indent=2))
+        return 0
+    except KeyboardInterrupt:
+        logger.info("Stopped by user (Ctrl+C)")
+        return 130
+    except Exception as e:
+        logger.error("Comparison failed | error=%s type=%s", e, type(e).__name__, exc_info=True)
+        return 1
+    finally:
+        if mlx_server:
+            mlx_server.stop()
+
+
 def main() -> int:
     """Main entry point.
 
@@ -333,6 +386,44 @@ def main() -> int:
         help="Force analysis even if not classified as important",
     )
 
+    # compare command
+    compare_parser = subparsers.add_parser("compare", help="Compare flash vs pro researcher outputs")
+    compare_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of stories to compare (default: 10)",
+    )
+    compare_parser.add_argument(
+        "--lang",
+        choices=["zh", "en"],
+        help="Output language",
+    )
+    compare_parser.add_argument(
+        "--output-dir",
+        help="Directory to save comparison reports (default: reports/compare/<timestamp>)",
+    )
+    compare_parser.add_argument(
+        "--flash-model",
+        help="Override flash researcher model (default: config.researcher_model)",
+    )
+    compare_parser.add_argument(
+        "--pro-model",
+        help="Override pro researcher model (default: config.researcher_model_pro)",
+    )
+    compare_parser.add_argument(
+        "--classifier-model",
+        type=str,
+        default="",
+        help="Optional local MLX model for classification (when set, starts MLX server)",
+    )
+    compare_parser.add_argument(
+        "--mlx-port",
+        type=int,
+        default=8080,
+        help="Port for local MLX server (default: 8080)",
+    )
+
     args = parser.parse_args()
 
     # Load configuration
@@ -342,7 +433,7 @@ def main() -> int:
     setup_logging(config, verbose=args.verbose)
 
     # Validate configuration for commands that need it
-    if args.command in ("run", "analyze"):
+    if args.command in ("run", "analyze", "compare"):
         error = config.validate()
         if error:
             print(f"Configuration error: {error}", file=sys.stderr)
@@ -354,6 +445,7 @@ def main() -> int:
         "status": cmd_status,
         "recent": cmd_recent,
         "analyze": cmd_analyze,
+        "compare": cmd_compare,
     }
 
     if args.command in commands:

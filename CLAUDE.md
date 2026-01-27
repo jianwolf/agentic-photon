@@ -13,7 +13,7 @@ Agentic Photon is a PydanticAI-powered news analysis pipeline that:
 ## Architecture (v2 - Grounded)
 
 ```
-RSS Feeds (17 sources)
+RSS Feeds (36 sources)
        │
        ▼
   Async Fetch ──► Dedup ──► Classifier (Local LLM)
