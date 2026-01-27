@@ -2,12 +2,35 @@
 
 An intelligent news analysis pipeline powered by PydanticAI agents. Monitors RSS feeds from curated tech/AI sources, classifies stories by importance, and generates detailed analysis reports.
 
+## LLM-as-a-Judge (Depth + Grounding)
+
+This repo now includes an **LLM-as-a-judge** workflow to score report quality and expose real MLE issues:
+
+- **Grounding compliance**: missing URLs, fake/placeholder sources, or citations that don't map to evidence.
+- **Hallucinated specificity**: confident details not supported by sources or the prompt.
+- **Depth vs cost trade-offs**: longer reports that add fluff instead of insight.
+- **Reliability gaps**: failed calls (e.g., 502) that break evaluation pipelines.
+
+**Workflow**
+
+```bash
+# 1) Generate flash vs pro reports
+python main.py compare --limit 10
+
+# 2) Judge depth + grounding
+python eval/judge_reports.py --input-dir reports/compare/20260126_214722 \
+  --model google-gla:gemini-3-pro-preview --max-concurrent 2
+```
+
+This produces `eval/judge_*.json` + `eval/judge_*.md` with per-story scores and winners.
+
 ## MLE Portfolio
 
 Concrete ML engineering artifacts live in-repo so you can trace data -> evaluation -> monitoring:
 
 - Data labeling workflow and schema: `data/README.md`, `data/label_schema.json`, and curated labels in `data/labels/`.
 - Evaluation harnesses for classification + retrieval: `eval/README.md` (can write metrics JSON and optional per-query details).
+- LLM-as-a-judge scoring for report depth + grounding: `eval/judge_reports.py` (batch scores + markdown summaries).
 - Ablation tracking, model card, and latency benchmarks: `docs/ablation.md`, `docs/model_card.md`, `docs/benchmarks.md`.
 - Monitoring snapshot tooling: `eval/monitoring_report.py` (important rate and top sources).
 
@@ -92,6 +115,11 @@ python eval/retrieval_eval.py --db-path news.db --queries eval/queries.jsonl --m
 python eval/benchmark.py --labels data/labels/sample.jsonl --db-path news.db --out eval/benchmarks.json
 python eval/classifier_benchmark.py --labels data/labels/seed.jsonl --max-items 50 --out eval/classifier_benchmark.json
 python eval/monitoring_report.py --db-path news.db --days 7
+
+# LLM-as-a-judge on report quality
+python main.py compare --limit 10
+python eval/judge_reports.py --input-dir reports/compare/20260126_214722 \
+  --model google-gla:gemini-3-pro-preview --max-concurrent 2
 ```
 
 ## CLI Commands
@@ -106,6 +134,7 @@ python eval/monitoring_report.py --db-path news.db --days 7
 | `python main.py status` | Show configuration and database stats |
 | `python main.py recent --hours 48` | Display recent important stories |
 | `python main.py analyze --title "..." --force` | Manually analyze a story |
+| `python main.py compare --limit 10` | Compare flash vs pro researcher outputs |
 
 ## Configuration
 
@@ -117,6 +146,7 @@ All settings via environment variables:
 | `LANGUAGE` | `zh` | Output language (`zh` or `en`) |
 | `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Classifier model for programmatic runs (CLI uses MLX by default) |
 | `RESEARCHER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for analysis |
+| `RESEARCHER_MODEL_PRO` | `google-gla:gemini-3-pro-preview` | Alternate researcher model for comparisons |
 | `MAX_AGE_HOURS` | `720` | Max story age (30 days) |
 | `POLL_INTERVAL_SECONDS` | `300` | Polling interval (5 min) |
 | `PRUNE_AFTER_DAYS` | `30` | Auto-delete older records |
