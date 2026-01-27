@@ -87,3 +87,6 @@ dmypy.json
 .ipynb_checkpoints/
 *.db-shm
 *.db-wal
+# LLM judge outputs
+/eval/judge_*.json
+/eval/judge_*.md
