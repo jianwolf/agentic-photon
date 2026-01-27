@@ -119,7 +119,7 @@ python eval/monitoring_report.py --db-path news.db --days 7
 # LLM-as-a-judge on report quality
 python main.py compare --limit 10
 python eval/judge_reports.py --input-dir reports/compare/20260126_214722 \
-  --model google-gla:gemini-3-pro-preview --max-concurrent 2
+  --model google-gla:gemini-3-flash-preview --max-concurrent 2
 ```
 
 ## CLI Commands

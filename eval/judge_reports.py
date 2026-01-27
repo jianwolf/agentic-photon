@@ -333,7 +333,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        default="google-gla:gemini-3-pro-preview",
+        default="google-gla:gemini-3-flash-preview",
         help="Judge model (PydanticAI model string)",
     )
     parser.add_argument(
