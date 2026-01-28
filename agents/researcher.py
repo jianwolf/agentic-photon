@@ -42,7 +42,7 @@ MAX_DESCRIPTION_CHARS = 2000
 # Bilingual prompts instructing the model on analysis methodology.
 # Context is now provided in the user message, not via tools.
 
-RESEARCHER_PROMPTS = {
+TECH_RESEARCHER_PROMPTS = {
     "zh": """【语言要求】所有输出内容必须使用中文撰写。技术术语（如AI、LLM、API等）可保留英文。
 
 你是一名资深新闻研究员和事实核查专家，目标是写出**连贯、有洞见、可验证**的新闻分析。
@@ -182,6 +182,108 @@ Must include:
 - May include scenarios/signals tied to verified facts""",
 }
 
+RESEARCH_RESEARCHER_PROMPTS = {
+    "zh": """【语言要求】所有输出内容必须使用中文撰写。技术术语可保留英文。
+
+你是一名资深研究论文分析师与事实核查专家，目标是为**AI/ML 研究论文**写出清晰、结构化、可验证的解读。
+
+## 你将收到的信息
+
+1. **论文标题和元数据** - 来自RSS订阅源
+2. **文章全文** - 可能包含论文摘要或正文（若可获取）
+3. **相关历史报道** - 来自我们数据库的过往分析
+
+## 关键原则（必须遵守）
+
+1. **必须使用网络搜索**核查关键结论与背景（建议至少2-5条查询）。
+2. **仅输出可验证信息**：summary / key_points 只能包含有来源支持的内容。
+3. **每个关键事实必须附带来源链接**：在 summary / key_points 中用 [1][2] 形式标注；在 thought 末尾提供 Sources 列表。
+4. **不确定或冲突信息**只能写在 thought 中，summary / key_points 禁止包含。
+5. **清晰区分**事实、分析、推断。
+
+## 论文解读要点（必须覆盖）
+- 研究问题：作者试图解决什么问题？
+- 方法/模型：关键技术路线、数据、实验设置
+- 结果：主要实验结论、性能或发现
+- 局限性：假设、数据偏差、未覆盖的风险
+- 意义与影响：对领域或产业可能带来的变化
+
+## 输出要求（必须用中文）
+
+### summary（约600-900字，中文）
+结构：
+1. 导语：论文核心结论与贡献
+2. 方法与实验：关键方法与评估方式
+3. 结果与意义：主要结论及影响
+4. 局限与展望：限制与后续方向
+要求：每段至少包含一个来源标注 [n]。
+
+### thought（中文）
+必须包含：
+- 使用的搜索查询列表
+- 关键声明核查结果（可用“声明-证据-结论”简表）
+- 来源可信度简评
+- 未核实/冲突信息（如有）
+- Sources 列表（示例：[1] 来源名 - URL）
+
+### key_points（3-5条，中文）
+- 每条独立成立，强调“这意味着什么”
+- 每条都要有 [n] 来源标注
+- 仅包含已核实信息
+
+### related_topics（中文）
+- 值得后续关注的话题或指标""",
+
+    "en": """You are a senior research-paper analyst and fact-checker. Your goal is to produce a **clear, structured, and verifiable** analysis of AI/ML research papers.
+
+## Information You Will Receive
+
+1. **Paper title and metadata** - From RSS feeds
+2. **Full article content** - May include abstract or paper text (if available)
+3. **Related past coverage** - Previous analyses from our database
+
+## Non-Negotiable Principles
+
+1. **You must use web search** to verify key claims and add context (aim for 2-5 queries).
+2. **Only present verified information**: summary and key_points must be supported by sources.
+3. **Attach source links for every key fact**: use [1][2] markers in summary / key_points, and provide a Sources list in thought.
+4. **Unverified or conflicting claims** may appear only in thought, never in summary / key_points.
+5. **Clearly separate** facts, analysis, and inference.
+
+## Paper Analysis Checklist (must cover)
+- Problem: What does the paper aim to solve?
+- Method: Core approach, data, and experimental setup
+- Results: Key findings or performance improvements
+- Limitations: Assumptions, biases, missing cases
+- Impact: Implications for the field or industry
+
+## Output Requirements
+
+### summary (~600-900 words)
+Structure:
+1. Lead: Core contribution and headline result
+2. Method & Evaluation: Key method and how it was tested
+3. Results & Impact: Main findings and why they matter
+4. Limitations & Outlook: Constraints and next steps
+Requirement: each paragraph must include at least one source marker [n].
+
+### thought
+Must include:
+- Search queries used
+- Verification log (claim → evidence → conclusion)
+- Source credibility assessment
+- Unverified/conflicting items (if any)
+- Sources list (e.g., [1] Outlet - URL)
+
+### key_points (3-5 items)
+- Each stands alone and emphasizes “what this means”
+- Each includes [n] source markers
+- Verified information only
+
+### related_topics
+- Follow-up topics or indicators to monitor""",
+}
+
 
 @dataclass
 class ResearchContext:
@@ -189,8 +291,10 @@ class ResearchContext:
 
     Attributes:
         language: Output language ('zh' or 'en')
+        track: Analysis track ('tech' or 'research')
     """
     language: str = "en"
+    track: str = "tech"
 
 
 @dataclass
@@ -233,7 +337,7 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     agent = Agent(
         model,
         output_type=ResearchReport,
-        system_prompt=RESEARCHER_PROMPTS["en"],  # Default fallback
+        system_prompt=TECH_RESEARCHER_PROMPTS["en"],  # Default fallback
         builtin_tools=[WebSearchTool()],  # Google Search grounding
         retries=3,
     )
@@ -241,12 +345,17 @@ def _create_agent(model: str) -> Agent[ResearchContext, ResearchReport]:
     @agent.system_prompt
     def dynamic_prompt(ctx: RunContext[ResearchContext]) -> str:
         """Select system prompt based on language setting."""
-        return RESEARCHER_PROMPTS.get(ctx.deps.language, RESEARCHER_PROMPTS["en"])
+        track = ctx.deps.track
+        if track == "research":
+            prompts = RESEARCH_RESEARCHER_PROMPTS
+        else:
+            prompts = TECH_RESEARCHER_PROMPTS
+        return prompts.get(ctx.deps.language, prompts["en"])
 
     return agent
 
 
-def _build_user_message(ctx: StoryContext, language: str = "en") -> str:
+def _build_user_message(ctx: StoryContext, language: str = "en", track: str = "tech") -> str:
     """Build the user message with all pre-fetched context.
 
     Args:
@@ -268,6 +377,7 @@ def _build_user_message(ctx: StoryContext, language: str = "en") -> str:
             "publisher": "来源",
             "published": "发布时间",
             "category": "分类",
+            "track": "路线",
             "classification": "分类说明",
             "description": "## RSS摘要",
             "no_description": "无摘要",
@@ -292,6 +402,7 @@ def _build_user_message(ctx: StoryContext, language: str = "en") -> str:
             "publisher": "Publisher",
             "published": "Published",
             "category": "Category",
+            "track": "Track",
             "classification": "Classification",
             "description": "## RSS Description",
             "no_description": "No description available",
@@ -314,6 +425,10 @@ def _build_user_message(ctx: StoryContext, language: str = "en") -> str:
         if ctx.classification.reasoning:
             classification_lines.append(f"{templates['classification']}: {ctx.classification.reasoning}")
     classification_context = "\n".join(classification_lines)
+    if language == "zh":
+        track_label = "研究论文" if track == "research" else "科技新闻"
+    else:
+        track_label = "Research Paper" if track == "research" else "Tech News"
 
     # Build article content section
     if ctx.article_content:
@@ -335,6 +450,7 @@ def _build_user_message(ctx: StoryContext, language: str = "en") -> str:
 {templates['title']}: {story.title}
 {templates['publisher']}: {publishers}
 {templates['published']}: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
+{templates['track']}: {track_label}
 {classification_context}
 
 {templates['description']}
@@ -374,15 +490,16 @@ class ResearcherAgent:
         >>> print(report.summary)
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, track: str = "tech"):
         """Initialize the researcher agent.
 
         Args:
             config: Application configuration with model and language settings
+            track: Analysis track ('tech' or 'research')
         """
         self.config = config
         self._agent = _create_agent(config.researcher_model)
-        self._context = ResearchContext(language=config.language)
+        self._context = ResearchContext(language=config.language, track=track)
 
     async def analyze(self, story_context: StoryContext) -> tuple[ResearchReport, int, int]:
         """Analyze a story with pre-fetched context.
@@ -394,7 +511,11 @@ class ResearcherAgent:
             Tuple of (research report, input_tokens, output_tokens)
         """
         story = story_context.story
-        message = _build_user_message(story_context, language=self._context.language)
+        message = _build_user_message(
+            story_context,
+            language=self._context.language,
+            track=self._context.track,
+        )
 
         try:
             result = await self._agent.run(

@@ -38,12 +38,13 @@ from database import Database
 from feeds import fetch_all_feeds
 from models.research import Analysis, ResearchReport
 from models.story import Story
-from models.classification import ClassificationResult
+from models.classification import ClassificationResult, ImportanceCategory
 from agents.classifier import ClassifierAgent
 from agents.researcher import ResearcherAgent, StoryContext
+from agents.summarizer import SummarizerAgent, render_digest_markdown
 from tools.fetch import fetch_article
 from embeddings import encode_text
-from notifications import notify_batch
+from notifications import notify_batch, save_digest_report
 from observability.logging import set_run_context, clear_context
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,26 @@ class PipelineStats:
         d = asdict(self)
         d["duration"] = round(d["duration"], 2)
         return d
+
+
+def _is_arxiv_story(story: Story) -> bool:
+    """Return True if the story appears to be from arXiv."""
+    for url in (story.article_url, story.source_url):
+        if url and "arxiv.org" in url.lower():
+            return True
+    return False
+
+
+def _route_story(
+    story: Story,
+    classification: ClassificationResult | None,
+) -> str:
+    """Route a story to the appropriate researcher track."""
+    if _is_arxiv_story(story):
+        return "research"
+    if classification and classification.category == ImportanceCategory.RESEARCH:
+        return "research"
+    return "tech"
 
 
 async def _gather_story_context(
@@ -208,7 +229,9 @@ class Pipeline:
         self.config = config
         self.db = Database(config.db_path)
         self.classifier = ClassifierAgent(config)
-        self.researcher = ResearcherAgent(config)
+        self.researcher = ResearcherAgent(config, track="tech")
+        self.researcher_research = ResearcherAgent(config, track="research")
+        self.summarizer = SummarizerAgent(config) if config.summary_enabled else None
 
         # Optional: Distributed tracing
         if config.enable_logfire:
@@ -284,51 +307,75 @@ class Pipeline:
             not_important = [(s, c) for s, c in classified if not c.is_important]
             stats.important = len(important)
 
+            route_buckets: dict[str, list[tuple[Story, ClassificationResult]]] = {
+                "tech": [],
+                "research": [],
+            }
+            arxiv_forced = 0
+            for story, classification in important:
+                if _is_arxiv_story(story):
+                    arxiv_forced += 1
+                route_buckets[_route_story(story, classification)].append((story, classification))
+
             logger.info("Classification complete | important=%d skip=%d", len(important), len(not_important))
+            logger.info(
+                "Routing complete | tech=%d research=%d arxiv_forced=%d",
+                len(route_buckets["tech"]),
+                len(route_buckets["research"]),
+                arxiv_forced,
+            )
 
             # Save non-important stories (no embedding needed)
             for story, _ in not_important:
                 self.db.save(story, Analysis.empty(), commit=False)
 
-            # Process important stories
-            if important:
-                # Gather context for all important stories in parallel
-                logger.info("Gathering context for %d important stories", len(important))
+            async def process_route(
+                route_name: str,
+                items: list[tuple[Story, ClassificationResult]],
+                researcher: ResearcherAgent,
+            ) -> None:
+                if not items:
+                    return
+
+                logger.info("Gathering context | route=%s stories=%d", route_name, len(items))
                 context_tasks = [
                     _gather_story_context(story, classification, self.db)
-                    for story, classification in important
+                    for story, classification in items
                 ]
                 story_contexts = await asyncio.gather(*context_tasks)
 
-                # Log context gathering summary
                 articles_ok = sum(1 for ctx in story_contexts if ctx.article_content)
-                rag_ok = sum(1 for ctx in story_contexts if ctx.related_stories and "No related" not in ctx.related_stories)
-                stats.articles_fetched = articles_ok
-                stats.rag_queries = len(story_contexts)
+                rag_ok = sum(
+                    1 for ctx in story_contexts
+                    if ctx.related_stories and "No related" not in ctx.related_stories
+                )
+                stats.articles_fetched += articles_ok
+                stats.rag_queries += len(story_contexts)
                 logger.info(
-                    "Context gathered | stories=%d articles=%d/%d rag=%d/%d",
-                    len(story_contexts), articles_ok, len(story_contexts), rag_ok, len(story_contexts)
+                    "Context gathered | route=%s stories=%d articles=%d/%d rag=%d/%d",
+                    route_name,
+                    len(story_contexts),
+                    articles_ok,
+                    len(story_contexts),
+                    rag_ok,
+                    len(story_contexts),
                 )
 
-                # Analyze with researcher (Gemini + grounding)
-                analyzed, input_tokens, output_tokens = await self.researcher.analyze_batch(
+                analyzed, input_tokens, output_tokens = await researcher.analyze_batch(
                     story_contexts,
                     max_concurrent=min(3, self.config.max_workers),
                 )
-                stats.analyzed = len(analyzed)
-                stats.input_tokens = input_tokens
-                stats.output_tokens = output_tokens
+                stats.analyzed += len(analyzed)
+                stats.input_tokens += input_tokens
+                stats.output_tokens += output_tokens
 
-                # Save results and generate embeddings
                 to_notify = []
                 for story, report in analyzed:
                     if report.summary:
                         analysis = Analysis.from_report(report)
                         self.db.save(story, analysis, commit=False)
 
-                        # Generate and save embedding for important story
                         try:
-                            # Embed title + summary for high-quality vector search
                             embed_text = f"{story.title} {report.summary[:500]}"
                             embedding = encode_text(embed_text)
                             self.db.save_embedding(story.hash, embedding, commit=False)
@@ -336,17 +383,54 @@ class Pipeline:
                             logger.warning("Embedding save failed for %s: %s", story.hash, e)
 
                         to_notify.append((story, analysis))
-                        logger.info("Story analyzed | hash=%s title=%s", story.hash, story.title[:60])
+                        logger.info(
+                            "Story analyzed | route=%s hash=%s title=%s",
+                            route_name,
+                            story.hash,
+                            story.title[:60],
+                        )
                     else:
                         stats.errors += 1
                         self.db.save(story, Analysis.empty(), commit=False)
-                        logger.warning("Empty analysis result | hash=%s", story.hash)
+                        logger.warning("Empty analysis result | route=%s hash=%s", route_name, story.hash)
 
-                # Send notifications
                 if to_notify:
-                    ok, fail = await notify_batch(to_notify, self.config)
-                    stats.notified = ok
+                    route_reports_dir = self.config.reports_dir / route_name
+                    route_config = replace(self.config, reports_dir=route_reports_dir)
+                    ok, fail, report_paths = await notify_batch(to_notify, route_config)
+                    stats.notified += ok
                     stats.errors += fail
+
+                    if self.summarizer and report_paths:
+                        try:
+                            digest, input_tokens, output_tokens = await self.summarizer.summarize_paths(report_paths)
+                            digest_md = render_digest_markdown(
+                                digest,
+                                report_paths,
+                                label=route_name.title(),
+                            )
+                            digest_path = await save_digest_report(digest_md, route_reports_dir)
+                            if digest_path:
+                                logger.info(
+                                    "Digest saved | route=%s file=%s reports=%d tokens=%d/%d",
+                                    route_name,
+                                    digest_path.name,
+                                    len(report_paths),
+                                    input_tokens,
+                                    output_tokens,
+                                )
+                        except Exception as e:
+                            logger.error(
+                                "Digest generation failed | route=%s type=%s error=%s",
+                                route_name,
+                                type(e).__name__,
+                                e,
+                                exc_info=True,
+                            )
+
+            if important:
+                await process_route("research", route_buckets["research"], self.researcher_research)
+                await process_route("tech", route_buckets["tech"], self.researcher)
 
             # Commit all changes
             self.db.commit()
