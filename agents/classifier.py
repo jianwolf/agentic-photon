@@ -269,18 +269,27 @@ class ClassifierAgent:
         # Get the detailed system prompt based on language setting
         system_prompt = CLASSIFIER_PROMPTS.get(self._context.language, CLASSIFIER_PROMPTS["en"])
 
-        # Single user message with full instructions embedded (no system message)
-        # Uses chain-of-thought: first analyze, then conclude
-        prompt = f"""{system_prompt}
-
----
-
-Classify the following news story. Think step-by-step:
+        def _build_prompt(strict: bool) -> str:
+            if strict:
+                strict_rules = """Return ONLY a single JSON object and nothing else.
+- Use double quotes for all strings and keys.
+- Escape backslashes (\\\\) and quotes (\\") inside strings.
+- Do not include markdown fences or analysis text."""
+                analysis_line = "Provide only the JSON object."
+            else:
+                strict_rules = ""
+                analysis_line = """Think step-by-step:
 
 1. First, identify the main topic and source type
 2. Check if it matches any "Important" criteria
 3. Check if it matches any "Not Important" criteria
 4. Make your final decision
+"""
+            return f"""{system_prompt}
+
+---
+
+Classify the following news story. {analysis_line}
 
 Then output ONLY valid JSON with these fields:
 - is_important: boolean
@@ -288,57 +297,75 @@ Then output ONLY valid JSON with these fields:
 - category: one of [politics, economics, business, technology, ai_ml, research, security, entertainment, sports, lifestyle, other]
 - reasoning: brief explanation (1-2 sentences)
 
+{strict_rules}
+
 Title: {story.title}
 Publisher: {publishers}
 Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
 
-Step-by-step analysis and JSON:"""
+JSON:"""
 
-        resp = await self._client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # Low temperature for deterministic output
-            top_p=0.1,  # Restrictive nucleus sampling for consistency
-            stream=False,
-        )
+        max_retries = 3
+        last_error: Exception | None = None
 
-        content = resp.choices[0].message.content.strip()
-        # Extract JSON from response (handle chain-of-thought + markdown fencing)
-        # The model may output analysis text before the JSON
-        json_str = None
+        for attempt in range(max_retries + 1):
+            strict = attempt > 0
+            prompt = _build_prompt(strict=strict)
 
-        # Try to find JSON in markdown code fence first
-        if "```json" in content:
-            json_str = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            # Try generic code fence
-            parts = content.split("```")
-            for part in parts[1::2]:  # Check odd-indexed parts (inside fences)
-                part = part.strip()
-                if part.startswith("json"):
-                    part = part[4:].strip()
-                if part.startswith("{"):
-                    json_str = part
-                    break
+            resp = await self._client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0 if strict else 0.1,
+                top_p=0.1,
+                stream=False,
+            )
 
-        # If no code fence, find raw JSON object
-        if not json_str:
-            # Find the last JSON object in the response (after analysis)
-            start = content.rfind("{")
-            end = content.rfind("}") + 1
-            if start != -1 and end > start:
-                json_str = content[start:end]
+            content = resp.choices[0].message.content.strip()
+            json_str = None
 
-        if not json_str:
-            raise ValueError(f"No JSON found in response: {content[:200]}")
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                parts = content.split("```")
+                for part in parts[1::2]:
+                    part = part.strip()
+                    if part.startswith("json"):
+                        part = part[4:].strip()
+                    if part.startswith("{"):
+                        json_str = part
+                        break
 
-        data = json.loads(json_str)
-        return ClassificationResult(
-            is_important=data.get("is_important", True),
-            confidence=data.get("confidence", 0.5),
-            category=ImportanceCategory(data.get("category", "other")),
-            reasoning=data.get("reasoning", ""),
-        )
+            if not json_str:
+                start = content.rfind("{")
+                end = content.rfind("}") + 1
+                if start != -1 and end > start:
+                    json_str = content[start:end]
+
+            if not json_str:
+                raise ValueError(f"No JSON found in response: {content[:200]}")
+
+            try:
+                data = json.loads(json_str)
+                return ClassificationResult(
+                    is_important=data.get("is_important", True),
+                    confidence=data.get("confidence", 0.5),
+                    category=ImportanceCategory(data.get("category", "other")),
+                    reasoning=data.get("reasoning", ""),
+                )
+            except json.JSONDecodeError as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.warning(
+                        "Local classification JSON decode failed | attempt=%d/%d title=%s error=%s",
+                        attempt + 1,
+                        max_retries + 1,
+                        story.title[:50],
+                        e,
+                    )
+                    continue
+                raise
+
+        raise last_error if last_error else ValueError("Local classification failed without JSON output")
 
     async def classify(self, story: Story) -> ClassificationResult:
         """Classify a single story.

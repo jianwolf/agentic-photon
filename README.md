@@ -153,7 +153,7 @@ All settings via environment variables:
 | `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Classifier model for programmatic runs (CLI uses MLX by default) |
 | `RESEARCHER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for analysis |
 | `RESEARCHER_MODEL_PRO` | `google-gla:gemini-3-pro-preview` | Alternate researcher model for comparisons |
-| `MAX_AGE_HOURS` | `720` | Max story age (30 days) |
+| `MAX_AGE_HOURS` | `24` | Max story age (1 day) |
 | `POLL_INTERVAL_SECONDS` | `300` | Polling interval (5 min) |
 | `PRUNE_AFTER_DAYS` | `30` | Auto-delete older records |
 | `MAX_WORKERS` | `8` | Concurrency for feed fetches and API calls |

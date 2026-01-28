@@ -213,7 +213,7 @@ class Config:
     summary_model: str = "google-gla:gemini-3-flash-preview"  # SUMMARY_MODEL - Digest model
 
     # === Story Filtering ===
-    max_age_hours: int = 720  # MAX_AGE_HOURS - Skip stories older than this (30 days)
+    max_age_hours: int = 24  # MAX_AGE_HOURS - Skip stories older than this (1 day)
 
     # === Database ===
     db_path: Path = field(default_factory=lambda: Path("news.db"))  # DB_PATH
@@ -257,7 +257,7 @@ class Config:
             researcher_model_pro=_env("RESEARCHER_MODEL_PRO", "google-gla:gemini-3-pro-preview"),
             summary_enabled=_env_bool("SUMMARY_ENABLED", True),
             summary_model=_env("SUMMARY_MODEL", "google-gla:gemini-3-flash-preview"),
-            max_age_hours=_env_int("MAX_AGE_HOURS", 720),
+            max_age_hours=_env_int("MAX_AGE_HOURS", 24),
             db_path=Path(_env("DB_PATH", "news.db")),
             prune_after_days=_env_int("PRUNE_AFTER_DAYS", 30),
             poll_interval_seconds=_env_int("POLL_INTERVAL_SECONDS", 300),
