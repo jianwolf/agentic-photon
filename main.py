@@ -9,6 +9,7 @@ Commands:
     status      Show configuration and database statistics
     recent      Display recent important stories
     analyze     Manually analyze a specific story
+    digest      Generate a digest from existing markdown reports
 
 Examples:
     python main.py run                    # Single run
@@ -28,7 +29,9 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from datetime import datetime
+from pathlib import Path
 
 from config import Config
 from database import Database
@@ -243,6 +246,110 @@ def cmd_analyze(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _latest_digest_mtime(reports_dir: Path) -> float | None:
+    """Return the latest digest modification timestamp in a directory."""
+    digest_paths = [path for path in reports_dir.glob("*_digest.md") if path.is_file()]
+    if not digest_paths:
+        return None
+    return max(path.stat().st_mtime for path in digest_paths)
+
+
+def _select_report_paths(
+    reports_dir: Path,
+    exclude_compare: bool,
+    since_hours: float | None,
+    since_last_digest: bool,
+    max_reports: int,
+) -> list[Path]:
+    """Select report markdown files for digest generation."""
+    if not reports_dir.exists():
+        return []
+
+    report_paths = [path for path in reports_dir.glob("*.md") if path.is_file()]
+    report_paths = [path for path in report_paths if not path.name.endswith("_digest.md")]
+
+    if exclude_compare:
+        report_paths = [
+            path
+            for path in report_paths
+            if not (path.name.endswith("_flash.md") or path.name.endswith("_pro.md"))
+        ]
+
+    cutoff = None
+    if since_hours is not None:
+        cutoff = time.time() - (since_hours * 3600)
+    elif since_last_digest:
+        cutoff = _latest_digest_mtime(reports_dir)
+
+    if cutoff is not None:
+        report_paths = [path for path in report_paths if path.stat().st_mtime > cutoff]
+
+    report_paths.sort(key=lambda path: (path.stat().st_mtime, path.name))
+
+    if max_reports > 0 and len(report_paths) > max_reports:
+        report_paths = report_paths[-max_reports:]
+
+    return report_paths
+
+
+def cmd_digest(args: argparse.Namespace, config: Config) -> int:
+    """Generate a digest from existing markdown reports."""
+    from agents.summarizer import SummarizerAgent, render_digest_markdown
+    from notifications import save_digest_report
+
+    if args.lang:
+        config.language = args.lang
+    if args.summary_model:
+        config.summary_model = args.summary_model
+
+    reports_dir = Path(args.reports_dir) if args.reports_dir else config.reports_dir
+    since_last_digest = not args.all and args.since_hours is None
+    report_paths = _select_report_paths(
+        reports_dir=reports_dir,
+        exclude_compare=args.exclude_compare,
+        since_hours=args.since_hours,
+        since_last_digest=since_last_digest,
+        max_reports=args.max_reports,
+    )
+
+    if not report_paths:
+        print("No report markdown files selected for digest.")
+        return 0
+
+    if args.dry_run:
+        print(f"Selected {len(report_paths)} report(s) from {reports_dir}:")
+        for path in report_paths:
+            print(f"- {path.name}")
+        return 0
+
+    if error := config.validate():
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return 1
+
+    async def run_digest() -> tuple[Path | None, int, int]:
+        summarizer = SummarizerAgent(config)
+        digest, input_tokens, output_tokens = await summarizer.summarize_paths(report_paths)
+        digest_md = render_digest_markdown(digest, report_paths)
+        if args.output:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(digest_md, encoding="utf-8")
+            return output_path, input_tokens, output_tokens
+        digest_path = await save_digest_report(digest_md, reports_dir)
+        return digest_path, input_tokens, output_tokens
+
+    digest_path, input_tokens, output_tokens = asyncio.run(run_digest())
+    if digest_path:
+        print(
+            f"Digest saved: {digest_path} "
+            f"(reports={len(report_paths)} tokens={input_tokens}/{output_tokens})"
+        )
+    else:
+        print("Digest generated but failed to save.", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_compare(args: argparse.Namespace, config: Config) -> int:
     """Compare researcher models on a sample of stories.
 
@@ -386,6 +493,52 @@ def main() -> int:
         help="Force analysis even if not classified as important",
     )
 
+    # digest command
+    digest_parser = subparsers.add_parser("digest", help="Generate a digest from reports")
+    digest_parser.add_argument(
+        "--reports-dir",
+        help="Directory containing markdown reports (default: config REPORTS_DIR)",
+    )
+    digest_parser.add_argument(
+        "--lang",
+        choices=["zh", "en"],
+        help="Output language",
+    )
+    digest_parser.add_argument(
+        "--summary-model",
+        help="Override summary model (default: config SUMMARY_MODEL)",
+    )
+    digest_parser.add_argument(
+        "--since-hours",
+        type=float,
+        help="Only include reports modified within the last N hours",
+    )
+    digest_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Include all reports (ignore since-hours and last digest)",
+    )
+    digest_parser.add_argument(
+        "--max-reports",
+        type=int,
+        default=0,
+        help="Max reports to include (0 = unlimited)",
+    )
+    digest_parser.add_argument(
+        "--exclude-compare",
+        action="store_true",
+        help="Exclude *_flash.md and *_pro.md comparison reports",
+    )
+    digest_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List selected reports and exit without calling the model",
+    )
+    digest_parser.add_argument(
+        "--output",
+        help="Write digest markdown to this path instead of reports directory",
+    )
+
     # compare command
     compare_parser = subparsers.add_parser("compare", help="Compare flash vs pro researcher outputs")
     compare_parser.add_argument(
@@ -445,6 +598,7 @@ def main() -> int:
         "status": cmd_status,
         "recent": cmd_recent,
         "analyze": cmd_analyze,
+        "digest": cmd_digest,
         "compare": cmd_compare,
     }
 

@@ -106,6 +106,22 @@ async def save_markdown_report(
         return None
 
 
+async def save_digest_report(digest_markdown: str, reports_dir: Path) -> Path | None:
+    """Save a per-run digest markdown file."""
+    try:
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_digest.md"
+        filepath = reports_dir / filename
+        filepath.write_text(digest_markdown, encoding="utf-8")
+        logger.info("Digest saved | file=%s", filepath.name)
+        return filepath
+    except Exception as e:
+        logger.error("Digest save failed: %s", e, exc_info=True)
+        return None
+
+
 async def send_webhook(story: Story, analysis: Analysis, url: str) -> bool:
     """Send notification via webhook POST."""
     if not url:
@@ -172,29 +188,45 @@ async def append_alerts_file(story: Story, analysis: Analysis, filepath: str) ->
         return False
 
 
-async def notify(story: Story, analysis: Analysis, config: Config) -> bool:
+async def notify(story: Story, analysis: Analysis, config: Config) -> tuple[bool, Path | None]:
     """Send all configured notifications for a story."""
     # Always save report
-    report_ok = await save_markdown_report(story, analysis, config.reports_dir) is not None
+    report_path = await save_markdown_report(story, analysis, config.reports_dir)
+    report_ok = report_path is not None
 
     # Optional notifications
     webhook_ok = await send_webhook(story, analysis, config.webhook_url)
     alerts_ok = await append_alerts_file(story, analysis, config.alerts_file)
 
-    return report_ok and webhook_ok and alerts_ok
+    return report_ok and webhook_ok and alerts_ok, report_path
 
 
 async def notify_batch(
     items: list[tuple[Story, Analysis]],
     config: Config,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[Path]]:
     """Send notifications for multiple stories.
 
     Returns:
-        (successful, failed) counts
+        (successful, failed, report_paths) counts and saved report paths
     """
     tasks = [notify(story, analysis, config) for story, analysis in items]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    ok = sum(1 for r in results if r is True)
-    return ok, len(results) - ok
+    ok = 0
+    fail = 0
+    report_paths: list[Path] = []
+
+    for result in results:
+        if isinstance(result, Exception):
+            fail += 1
+            continue
+        ok_flag, path = result
+        if ok_flag:
+            ok += 1
+        else:
+            fail += 1
+        if path:
+            report_paths.append(path)
+
+    return ok, fail, report_paths

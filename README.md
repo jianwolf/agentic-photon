@@ -88,6 +88,9 @@ python main.py run -c
 
 # Custom poll interval
 python main.py run -c --interval 600
+
+# Generate a digest from existing markdown reports
+python main.py digest --reports-dir reports
 ```
 
 Note: `main.py run` starts a local MLX classifier by default (Apple Silicon). For non-Apple platforms, use the programmatic pipeline with `CLASSIFIER_MODEL` set to a remote model.
@@ -134,6 +137,7 @@ python eval/judge_reports.py --input-dir reports/compare/20260126_214722 \
 | `python main.py status` | Show configuration and database stats |
 | `python main.py recent --hours 48` | Display recent important stories |
 | `python main.py analyze --title "..." --force` | Manually analyze a story |
+| `python main.py digest --reports-dir reports` | Summarize existing reports into a digest |
 | `python main.py compare --limit 10` | Compare flash vs pro researcher outputs |
 
 ## Configuration

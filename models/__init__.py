@@ -27,6 +27,7 @@ Example:
 from models.story import Story
 from models.classification import ClassificationResult, ImportanceCategory
 from models.research import ResearchReport, Analysis
+from models.summary import DigestReport, DigestStory
 
 __all__ = [
     "Story",
@@ -34,4 +35,6 @@ __all__ = [
     "ImportanceCategory",
     "ResearchReport",
     "Analysis",
+    "DigestReport",
+    "DigestStory",
 ]

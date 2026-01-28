@@ -18,6 +18,10 @@ Environment Variables:
         REPORTS_DIR: Directory for markdown reports
         LOG_DIR: Directory for log files
 
+    Summary:
+        SUMMARY_ENABLED: Enable per-run digest generation
+        SUMMARY_MODEL: Model for digest summarizer
+
     Pipeline Behavior:
         MAX_AGE_HOURS: Maximum story age to process (default: 720 = 30 days)
         POLL_INTERVAL_SECONDS: Delay between runs in continuous mode
@@ -204,6 +208,10 @@ class Config:
     researcher_model: str = "google-gla:gemini-3-flash-preview"  # Deep analysis
     researcher_model_pro: str = "google-gla:gemini-3-pro-preview"  # Comparison model
 
+    # === Digest Summaries ===
+    summary_enabled: bool = True  # SUMMARY_ENABLED - Enable per-run digest generation
+    summary_model: str = "google-gla:gemini-3-flash-preview"  # SUMMARY_MODEL - Digest model
+
     # === Story Filtering ===
     max_age_hours: int = 720  # MAX_AGE_HOURS - Skip stories older than this (30 days)
 
@@ -247,6 +255,8 @@ class Config:
             classifier_model=_env("CLASSIFIER_MODEL", "google-gla:gemini-3-flash-preview"),
             researcher_model=_env("RESEARCHER_MODEL", "google-gla:gemini-3-flash-preview"),
             researcher_model_pro=_env("RESEARCHER_MODEL_PRO", "google-gla:gemini-3-pro-preview"),
+            summary_enabled=_env_bool("SUMMARY_ENABLED", True),
+            summary_model=_env("SUMMARY_MODEL", "google-gla:gemini-3-flash-preview"),
             max_age_hours=_env_int("MAX_AGE_HOURS", 720),
             db_path=Path(_env("DB_PATH", "news.db")),
             prune_after_days=_env_int("PRUNE_AFTER_DAYS", 30),
