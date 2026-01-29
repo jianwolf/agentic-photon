@@ -293,6 +293,8 @@ Requirements:
 
 The first run will download the model (~2GB). The MLX server starts automatically and shuts down when the pipeline exits. If you want a remote classifier instead, run the `Pipeline` programmatically with `CLASSIFIER_MODEL` and skip the MLX CLI path.
 
+The MLX server logs to `log/mlx_server.log` (stdout/stderr). A built-in watchdog health-checks `/v1/models` every 30 seconds and restarts the server after 3 consecutive failures to prevent hangs when the server becomes unresponsive.
+
 ### Consistency Optimizations for Small Models
 
 A key challenge with small language models (3B parameters) is **classification inconsistency** — the same input can produce different outputs across runs due to sampling randomness. Through empirical testing, I identified three techniques that significantly improve determinism:
