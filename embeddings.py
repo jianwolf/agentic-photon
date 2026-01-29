@@ -17,6 +17,7 @@ Usage:
 """
 
 import logging
+import os
 import time
 
 import numpy as np
@@ -55,7 +56,12 @@ class EmbeddingModel:
             logger.info("Loading embedding model: %s", self.model_name)
             start_time = time.time()
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name)
+            token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+            if token:
+                self._model = SentenceTransformer(self.model_name, token=token)
+            else:
+                logger.info("HF_TOKEN not set; using unauthenticated Hugging Face downloads")
+                self._model = SentenceTransformer(self.model_name)
             elapsed = time.time() - start_time
             logger.info("Embedding model loaded | dim=%d time=%.1fs", self.dim, elapsed)
         return self._model

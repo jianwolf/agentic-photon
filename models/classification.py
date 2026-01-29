@@ -18,8 +18,11 @@ Category Design:
     category. Stories marked important are sent to the researcher agent.
 """
 
+import logging
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ImportanceCategory(str, Enum):
@@ -66,6 +69,61 @@ class ImportanceCategory(str, Enum):
     LOCAL = "local"                 # Regional/community news
     WEATHER = "weather"             # Forecasts, severe weather
     OTHER = "other"                 # Uncategorized content
+
+
+# Map common alias strings from LLM output to supported categories.
+_CATEGORY_ALIASES: dict[str, ImportanceCategory] = {
+    "ai": ImportanceCategory.AI_ML,
+    "ml": ImportanceCategory.AI_ML,
+    "machine_learning": ImportanceCategory.AI_ML,
+    "artificial_intelligence": ImportanceCategory.AI_ML,
+    "cybersecurity": ImportanceCategory.SECURITY,
+    "infosec": ImportanceCategory.SECURITY,
+    "security": ImportanceCategory.SECURITY,
+    "tech": ImportanceCategory.TECHNOLOGY,
+    "technology": ImportanceCategory.TECHNOLOGY,
+    "world": ImportanceCategory.INTERNATIONAL,
+    "international": ImportanceCategory.INTERNATIONAL,
+    "policy": ImportanceCategory.POLICY,
+    "regulation": ImportanceCategory.POLICY,
+    "health": ImportanceCategory.LIFESTYLE,
+    "medical": ImportanceCategory.LIFESTYLE,
+    "medicine": ImportanceCategory.LIFESTYLE,
+    "lifestyle": ImportanceCategory.LIFESTYLE,
+    "local": ImportanceCategory.LOCAL,
+    "weather": ImportanceCategory.WEATHER,
+    "economy": ImportanceCategory.ECONOMICS,
+    "finance": ImportanceCategory.ECONOMICS,
+    "markets": ImportanceCategory.ECONOMICS,
+    "biz": ImportanceCategory.BUSINESS,
+    "company": ImportanceCategory.BUSINESS,
+    "government": ImportanceCategory.POLITICS,
+    "geopolitics": ImportanceCategory.INTERNATIONAL,
+    "paper": ImportanceCategory.RESEARCH,
+    "preprint": ImportanceCategory.RESEARCH,
+    "arxiv": ImportanceCategory.RESEARCH,
+    "academic": ImportanceCategory.RESEARCH,
+}
+
+
+def normalize_category(value: str | ImportanceCategory | None) -> ImportanceCategory:
+    """Normalize a raw category value into a supported ImportanceCategory."""
+    if isinstance(value, ImportanceCategory):
+        return value
+    if value is None:
+        return ImportanceCategory.OTHER
+    raw = str(value).strip().lower()
+    if not raw:
+        return ImportanceCategory.OTHER
+    normalized = raw.replace(" ", "_").replace("-", "_")
+    try:
+        return ImportanceCategory(normalized)
+    except ValueError:
+        mapped = _CATEGORY_ALIASES.get(normalized)
+        if mapped is not None:
+            return mapped
+        logger.warning("Unknown classifier category; defaulting to other | value=%s", value)
+        return ImportanceCategory.OTHER
 
 
 # Categories that warrant deep analysis by the researcher agent
@@ -120,6 +178,11 @@ class ClassificationResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, description="Classification confidence (0-1)")
     category: ImportanceCategory = Field(description="Primary topic category")
     reasoning: str = Field(default="", description="Brief explanation of decision")
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value):
+        return normalize_category(value)
 
     @classmethod
     def skip(

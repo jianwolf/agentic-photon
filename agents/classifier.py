@@ -28,7 +28,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from config import Config
 from models.story import Story
-from models.classification import ClassificationResult, ImportanceCategory
+from models.classification import ClassificationResult, ImportanceCategory, normalize_category
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ CLASSIFIER_PROMPTS = {
 **标记为不重要 (is_important=false) 的新闻：**
 - 娱乐八卦、体育赛事结果、名人动态
 - 地区性小新闻、天气预报、生活方式内容
+- 健康/医疗类生活资讯（请使用分类 "lifestyle"）
 - 软文、广告、客户案例研究（如"某公司如何使用ChatGPT"）、榜单推荐
 - 个人博客文章、引用汇编、个人学习笔记
 - 小型开发工具发布（除非是平台级或改变行业的工具）
@@ -101,6 +102,7 @@ CLASSIFIER_PROMPTS = {
 **Mark as Not Important (is_important=false):**
 - Entertainment gossip, sports scores, celebrity news
 - Local small news, weather forecasts, lifestyle content
+- Health or medical interest pieces (use category "lifestyle")
 - Sponsored content, advertisements, customer case studies (e.g., "How X company uses ChatGPT"), listicles
 - Personal blog posts, quote compilations, personal learning notes
 - Small developer tool releases (unless platform-level or industry-changing)
@@ -146,6 +148,8 @@ def _parse_local_model(model_str: str) -> tuple[str, str] | None:
         model_name, base_url = rest.split("@", 1)
         return model_name, base_url
     return None
+
+
 
 
 def _create_model(model_str: str):
@@ -288,7 +292,7 @@ class ClassifierAgent:
 3. Check if it matches any "Not Important" criteria
 4. Make your final decision
 """
-            return f"""{system_prompt}
+        return f"""{system_prompt}
 
 ---
 
@@ -297,7 +301,7 @@ Classify the following news story. {analysis_line}
 Then output ONLY valid JSON with these fields:
 - is_important: boolean
 - confidence: number 0-1
-- category: one of [politics, economics, business, technology, ai_ml, research, security, entertainment, sports, lifestyle, other]
+- category: one of [politics, economics, business, international, policy, technology, ai_ml, research, security, entertainment, sports, lifestyle, local, weather, other]
 - reasoning: brief explanation (1-2 sentences)
 
 {strict_rules if strict else ""}
@@ -390,10 +394,11 @@ JSON:"""
 
             try:
                 data = json.loads(json_str)
+                category = normalize_category(data.get("category", "other"))
                 return ClassificationResult(
                     is_important=data.get("is_important", True),
                     confidence=data.get("confidence", 0.5),
-                    category=ImportanceCategory(data.get("category", "other")),
+                    category=category,
                     reasoning=data.get("reasoning", ""),
                 )
             except json.JSONDecodeError as e:

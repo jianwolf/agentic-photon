@@ -22,9 +22,11 @@ This design provides:
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
 
 from pydantic_ai import Agent, RunContext, UsageLimits
+from pydantic_ai.exceptions import ModelHTTPError
 
 from config import Config
 from models.story import Story
@@ -466,6 +468,25 @@ def _build_user_message(ctx: StoryContext, language: str = "en", track: str = "t
     return message
 
 
+def _is_retryable_gemini_error(error: Exception) -> bool:
+    if not isinstance(error, ModelHTTPError):
+        return False
+    model_name = getattr(error, "model_name", "") or ""
+    if "gemini" not in model_name:
+        return False
+    status_code = getattr(error, "status_code", None)
+    if status_code in {429, 500, 502, 503, 504}:
+        return True
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error", {}) if isinstance(body.get("error", {}), dict) else {}
+        message = str(err.get("message", "")).lower()
+        status = str(err.get("status", "")).upper()
+        if "overloaded" in message or status in {"UNAVAILABLE", "RESOURCE_EXHAUSTED"}:
+            return True
+    return False
+
+
 class ResearcherAgent:
     """Performs deep analysis on important news stories using Gemini with grounding.
 
@@ -517,27 +538,41 @@ class ResearcherAgent:
             track=self._context.track,
         )
 
-        try:
-            result = await self._agent.run(
-                message,
-                deps=self._context,
-                usage_limits=UsageLimits(request_limit=5),  # Reduced from 15 (no tool round-trips)
-            )
-            # Log token usage
-            usage = result.usage()
-            input_tokens = usage.request_tokens or 0
-            output_tokens = usage.response_tokens or 0
-            logger.info(
-                "Analysis complete | title=%s chars=%d input_tokens=%d output_tokens=%d",
-                story.title[:50],
-                len(result.output.summary),
-                input_tokens,
-                output_tokens,
-            )
-            return result.output, input_tokens, output_tokens
-        except Exception as e:
-            logger.error("Analysis failed for '%s...': %s | type=%s", story.title[:50], e, type(e).__name__, exc_info=True)
-            return ResearchReport.empty(reason=f"Analysis error ({type(e).__name__}): {e}"), 0, 0
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                result = await self._agent.run(
+                    message,
+                    deps=self._context,
+                    usage_limits=UsageLimits(request_limit=5),  # Reduced from 15 (no tool round-trips)
+                )
+                # Log token usage
+                usage = result.usage()
+                input_tokens = usage.request_tokens or 0
+                output_tokens = usage.response_tokens or 0
+                logger.info(
+                    "Analysis complete | title=%s chars=%d input_tokens=%d output_tokens=%d",
+                    story.title[:50],
+                    len(result.output.summary),
+                    input_tokens,
+                    output_tokens,
+                )
+                return result.output, input_tokens, output_tokens
+            except Exception as e:
+                if _is_retryable_gemini_error(e) and attempt < max_retries:
+                    wait_seconds = min(30.0, (2 ** attempt) + random.uniform(0.5, 1.5))
+                    logger.warning(
+                        "Gemini overloaded; retrying | attempt=%d/%d wait=%.1fs title=%s error=%s",
+                        attempt + 1,
+                        max_retries + 1,
+                        wait_seconds,
+                        story.title[:50],
+                        e,
+                    )
+                    await asyncio.sleep(wait_seconds)
+                    continue
+                logger.error("Analysis failed for '%s...': %s | type=%s", story.title[:50], e, type(e).__name__, exc_info=True)
+                return ResearchReport.empty(reason=f"Analysis error ({type(e).__name__}): {e}"), 0, 0
 
     async def analyze_batch(
         self,
