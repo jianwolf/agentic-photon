@@ -60,6 +60,7 @@ class MLXServerManager:
     _watchdog_stop: threading.Event
     _lock: threading.Lock
     _atexit_registered: bool
+    _external_server: bool
 
     def __init__(
         self,
@@ -100,6 +101,7 @@ class MLXServerManager:
         self._watchdog_stop = threading.Event()
         self._lock = threading.Lock()
         self._atexit_registered = False
+        self._external_server = False
 
     @property
     def base_url(self) -> str:
@@ -116,6 +118,17 @@ class MLXServerManager:
             if self._process is not None and self._process.poll() is None:
                 logger.warning("MLX server already running")
                 return
+
+            # If an external server is already up, use it instead of starting a new one.
+            if self._check_health():
+                logger.info("MLX server already running | url=%s (using existing)", self._base_url)
+                self._external_server = True
+                if not self._atexit_registered:
+                    atexit.register(self.stop)
+                    self._atexit_registered = True
+                return
+
+            self._external_server = False
             self._start_process()
 
             if not self._atexit_registered:
@@ -123,16 +136,39 @@ class MLXServerManager:
                 self._atexit_registered = True
 
         # Wait for server to be ready
-        self._wait_for_ready()
-        self._start_watchdog()
+        try:
+            self._wait_for_ready()
+        except MLXServerError:
+            # If startup failed but an external server became available, use it.
+            if self._check_health():
+                with self._lock:
+                    if self._process and self._process.poll() is not None:
+                        self._process = None
+                    self._close_log_file()
+                logger.warning("MLX server became ready externally | url=%s (using existing)", self._base_url)
+                self._external_server = True
+                return
+            raise
+
+        if not self._external_server:
+            self._start_watchdog()
 
     def _start_process(self) -> None:
-        cmd = [
-            sys.executable, "-m", "mlx_lm.server",
-            "--model", self.model,
-            "--host", self.host,
-            "--port", str(self.port),
-        ]
+        entry_script = Path(__file__).with_name("mlx_server_entry.py")
+        if entry_script.exists():
+            cmd = [
+                sys.executable, str(entry_script),
+                "--model", self.model,
+                "--host", self.host,
+                "--port", str(self.port),
+            ]
+        else:
+            cmd = [
+                sys.executable, "-m", "mlx_lm.server",
+                "--model", self.model,
+                "--host", self.host,
+                "--port", str(self.port),
+            ]
 
         logger.info("Starting MLX server | cmd=%s", " ".join(cmd))
 
@@ -190,8 +226,9 @@ class MLXServerManager:
             # Check if process died
             if self._process.poll() is not None:
                 log_hint = f" See {self._log_path} for details." if self._log_path else ""
+                crash_hint = self._diagnose_crash()
                 raise MLXServerError(
-                    f"MLX server exited unexpectedly (code {self._process.returncode}).{log_hint}"
+                    f"MLX server exited unexpectedly (code {self._process.returncode}).{log_hint}{crash_hint}"
                 )
 
             # Try health check
@@ -289,7 +326,7 @@ class MLXServerManager:
                 logger.warning("MLX watchdog did not stop cleanly")
 
         with self._lock:
-            if self._process is None:
+            if self._process is None or self._external_server:
                 self._close_log_file()
                 return
 
@@ -298,6 +335,7 @@ class MLXServerManager:
         with self._lock:
             self._stop_process()
             self._close_log_file()
+            self._external_server = False
 
         # Unregister atexit handler
         try:
@@ -329,4 +367,30 @@ class MLXServerManager:
 
     def is_running(self) -> bool:
         """Check if the server process is running."""
+        if self._external_server:
+            return self._check_health()
         return self._process is not None and self._process.poll() is None
+
+    def _diagnose_crash(self) -> str:
+        if not self._log_path:
+            return ""
+        try:
+            tail = self._read_log_tail(max_lines=80)
+        except Exception:
+            return ""
+        if "NSRangeException" in tail and "index 0 beyond bounds" in tail:
+            return (
+                " Metal device list was empty. This can happen in headless or sandboxed shells; "
+                "try starting `mlx_lm.server` in a regular Terminal session and rerun."
+            )
+        return ""
+
+    def _read_log_tail(self, max_lines: int = 80) -> str:
+        if not self._log_path:
+            return ""
+        try:
+            with self._log_path.open("r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            return "".join(lines[-max_lines:])
+        except Exception:
+            return ""

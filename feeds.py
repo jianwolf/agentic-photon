@@ -58,6 +58,7 @@ async def _fetch_feed(
     url: str,
     timeout: int,
     verify_ssl: bool = True,
+    accept_encoding: str | None = "gzip, deflate",
 ) -> str | None:
     """Fetch feed content from URL with SSL fallback.
 
@@ -74,10 +75,14 @@ async def _fetch_feed(
         Feed content as string, or None on any error
     """
     try:
+        headers = {"User-Agent": USER_AGENT}
+        if accept_encoding:
+            headers["Accept-Encoding"] = accept_encoding
+
         async with session.get(
             url,
             timeout=aiohttp.ClientTimeout(total=timeout),
-            headers={"User-Agent": USER_AGENT},
+            headers=headers,
             ssl=create_ssl_context(verify_ssl),
         ) as resp:
             if resp.status != 200:
@@ -93,6 +98,13 @@ async def _fetch_feed(
             logger.debug("Feed %s: SSL error, retrying without verification", url)
             return await _fetch_feed(session, url, timeout, verify_ssl=False)
         logger.warning("Feed %s: SSL verification failed after retry: %s", url, e)
+        return None
+    except aiohttp.ClientPayloadError as e:
+        # Retry without brotli if server ignored Accept-Encoding
+        if "content-encoding: br" in str(e).lower() and accept_encoding != "identity":
+            logger.debug("Feed %s: brotli encoding not supported, retrying with identity", url)
+            return await _fetch_feed(session, url, timeout, verify_ssl=verify_ssl, accept_encoding="identity")
+        logger.warning("Feed %s: payload error: %s", url, e)
         return None
     except asyncio.TimeoutError:
         logger.warning("Feed %s: request timed out after %ds", url, timeout)

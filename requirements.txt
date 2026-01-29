@@ -1,34 +1,34 @@
 # Core dependencies
-pydantic>=2.0.0
-pydantic-ai>=0.1.0
+pydantic==2.12.5
+pydantic-ai==1.48.0
 
 # Async HTTP
-aiohttp>=3.9.0
-aiofiles>=23.0.0
+aiohttp==3.13.3
+aiofiles==25.1.0
 
 # RSS parsing
-feedparser>=6.0.0
+feedparser==6.0.12
 
 # SSL certificates
-certifi>=2023.0.0
+certifi==2026.1.4
 
 # Google Gemini (for researcher agent)
-google-genai>=1.0.0
+google-genai==1.60.0
 
 # OpenAI client (for local MLX server compatibility)
-openai>=1.0.0
+openai==2.16.0
 
 # Local MLX inference (macOS Apple Silicon only)
 # Requires macOS 15.0+
-mlx-lm>=0.20.0; sys_platform == "darwin"
+mlx-lm==0.29.1; sys_platform == "darwin"
 
 # Embeddings for hybrid RAG (BM25 + Vector search)
-sentence-transformers>=2.2.0
-numpy>=1.24.0
+sentence-transformers==5.2.2
+numpy==2.3.5
 
 # Observability (optional)
-logfire>=0.50.0
+logfire==4.21.0
 
 # Development
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+pytest==9.0.2
+pytest-asyncio==1.3.0
