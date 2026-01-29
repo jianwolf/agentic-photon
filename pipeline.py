@@ -44,7 +44,7 @@ from agents.researcher import ResearcherAgent, StoryContext
 from agents.summarizer import SummarizerAgent, render_digest_markdown
 from tools.fetch import fetch_article
 from embeddings import encode_text
-from notifications import notify_batch, save_digest_report
+from notifications import notify, save_digest_report
 from observability.logging import set_run_context, clear_context
 
 logger = logging.getLogger(__name__)
@@ -361,72 +361,110 @@ class Pipeline:
                     len(story_contexts),
                 )
 
-                analyzed, input_tokens, output_tokens = await researcher.analyze_batch(
-                    story_contexts,
-                    max_concurrent=min(3, self.config.max_workers),
-                )
-                stats.analyzed += len(analyzed)
-                stats.input_tokens += input_tokens
-                stats.output_tokens += output_tokens
+                route_reports_dir = self.config.reports_dir / route_name
+                route_config = replace(self.config, reports_dir=route_reports_dir)
+                max_concurrent = min(3, self.config.max_workers)
+                semaphore = asyncio.Semaphore(max_concurrent)
+                stats_lock = asyncio.Lock()
+                db_lock = asyncio.Lock()
+                report_paths: list[Path] = []
+                completed = 0
+                total = len(story_contexts)
 
-                to_notify = []
-                for story, report in analyzed:
-                    if report.summary:
-                        analysis = Analysis.from_report(report)
-                        self.db.save(story, analysis, commit=False)
-
+                async def analyze_one(index: int, story_ctx: StoryContext) -> None:
+                    nonlocal completed
+                    async with semaphore:
                         try:
-                            embed_text = f"{story.title} {report.summary[:500]}"
-                            embedding = encode_text(embed_text)
-                            self.db.save_embedding(story.hash, embedding, commit=False)
-                        except Exception as e:
-                            logger.warning("Embedding save failed for %s: %s", story.hash, e)
-
-                        to_notify.append((story, analysis))
-                        logger.info(
-                            "Story analyzed | route=%s hash=%s title=%s",
-                            route_name,
-                            story.hash,
-                            story.title[:60],
-                        )
-                    else:
-                        stats.errors += 1
-                        self.db.save(story, Analysis.empty(), commit=False)
-                        logger.warning("Empty analysis result | route=%s hash=%s", route_name, story.hash)
-
-                if to_notify:
-                    route_reports_dir = self.config.reports_dir / route_name
-                    route_config = replace(self.config, reports_dir=route_reports_dir)
-                    ok, fail, report_paths = await notify_batch(to_notify, route_config)
-                    stats.notified += ok
-                    stats.errors += fail
-
-                    if self.summarizer and report_paths:
-                        try:
-                            digest, input_tokens, output_tokens = await self.summarizer.summarize_paths(report_paths)
-                            digest_md = render_digest_markdown(
-                                digest,
-                                report_paths,
-                                label=route_name.title(),
-                            )
-                            digest_path = await save_digest_report(digest_md, route_reports_dir)
-                            if digest_path:
+                            report, input_tokens, output_tokens = await researcher.analyze(story_ctx)
+                            async with stats_lock:
+                                stats.analyzed += 1
+                                stats.input_tokens += input_tokens
+                                stats.output_tokens += output_tokens
+                                completed += 1
                                 logger.info(
-                                    "Digest saved | route=%s file=%s reports=%d tokens=%d/%d",
+                                    "Analysis progress | route=%s %d/%d (%.0f%%)",
                                     route_name,
-                                    digest_path.name,
-                                    len(report_paths),
-                                    input_tokens,
-                                    output_tokens,
+                                    completed,
+                                    total,
+                                    (completed / total * 100) if total else 100.0,
                                 )
+
+                            if report.summary:
+                                analysis = Analysis.from_report(report)
+                                embedding = None
+                                try:
+                                    embed_text = f"{story_ctx.story.title} {report.summary[:500]}"
+                                    embedding = encode_text(embed_text)
+                                except Exception as e:
+                                    logger.warning("Embedding save failed for %s: %s", story_ctx.story.hash, e)
+
+                                async with db_lock:
+                                    self.db.save(story_ctx.story, analysis, commit=False)
+                                    if embedding is not None:
+                                        self.db.save_embedding(story_ctx.story.hash, embedding, commit=False)
+
+                                ok, report_path = await notify(story_ctx.story, analysis, route_config)
+                                async with stats_lock:
+                                    if ok:
+                                        stats.notified += 1
+                                    else:
+                                        stats.errors += 1
+                                if report_path:
+                                    report_paths.append(report_path)
+
+                                logger.info(
+                                    "Story analyzed | route=%s hash=%s title=%s",
+                                    route_name,
+                                    story_ctx.story.hash,
+                                    story_ctx.story.title[:60],
+                                )
+                            else:
+                                async with stats_lock:
+                                    stats.errors += 1
+                                async with db_lock:
+                                    self.db.save(story_ctx.story, Analysis.empty(), commit=False)
+                                logger.warning("Empty analysis result | route=%s hash=%s", route_name, story_ctx.story.hash)
                         except Exception as e:
+                            async with stats_lock:
+                                stats.errors += 1
                             logger.error(
-                                "Digest generation failed | route=%s type=%s error=%s",
+                                "Analysis task failed | route=%s index=%d error=%s",
                                 route_name,
-                                type(e).__name__,
+                                index,
                                 e,
                                 exc_info=True,
                             )
+
+                tasks = [analyze_one(i, ctx) for i, ctx in enumerate(story_contexts)]
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+                if self.summarizer and report_paths:
+                    try:
+                        report_paths.sort(key=lambda p: p.name)
+                        digest, input_tokens, output_tokens = await self.summarizer.summarize_paths(report_paths)
+                        digest_md = render_digest_markdown(
+                            digest,
+                            report_paths,
+                            label=route_name.title(),
+                        )
+                        digest_path = await save_digest_report(digest_md, route_reports_dir)
+                        if digest_path:
+                            logger.info(
+                                "Digest saved | route=%s file=%s reports=%d tokens=%d/%d",
+                                route_name,
+                                digest_path.name,
+                                len(report_paths),
+                                input_tokens,
+                                output_tokens,
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "Digest generation failed | route=%s type=%s error=%s",
+                            route_name,
+                            type(e).__name__,
+                            e,
+                            exc_info=True,
+                        )
 
             if important:
                 await process_route("research", route_buckets["research"], self.researcher_research)
