@@ -32,6 +32,8 @@ from models.classification import ClassificationResult, ImportanceCategory
 
 logger = logging.getLogger(__name__)
 
+MAX_CLASSIFIER_INPUT_CHARS = 80_000
+MAX_CLASSIFIER_OUTPUT_TOKENS = 160
 
 # === System Prompts ===
 # Bilingual prompts for Chinese (zh) and English (en) output.
@@ -269,12 +271,13 @@ class ClassifierAgent:
         # Get the detailed system prompt based on language setting
         system_prompt = CLASSIFIER_PROMPTS.get(self._context.language, CLASSIFIER_PROMPTS["en"])
 
-        def _build_prompt(strict: bool) -> str:
+        def _build_prompt(strict: bool, title: str, publishers_str: str) -> str:
             if strict:
                 strict_rules = """Return ONLY a single JSON object and nothing else.
 - Use double quotes for all strings and keys.
 - Escape backslashes (\\\\) and quotes (\\") inside strings.
-- Do not include markdown fences or analysis text."""
+- Do not include markdown fences or analysis text.
+- Output the JSON on a single line."""
                 analysis_line = "Provide only the JSON object."
             else:
                 strict_rules = ""
@@ -297,10 +300,10 @@ Then output ONLY valid JSON with these fields:
 - category: one of [politics, economics, business, technology, ai_ml, research, security, entertainment, sports, lifestyle, other]
 - reasoning: brief explanation (1-2 sentences)
 
-{strict_rules}
+{strict_rules if strict else ""}
 
-Title: {story.title}
-Publisher: {publishers}
+Title: {title}
+Publisher: {publishers_str}
 Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}
 
 JSON:"""
@@ -308,17 +311,58 @@ JSON:"""
         max_retries = 3
         last_error: Exception | None = None
 
+        timeout_seconds = 60
         for attempt in range(max_retries + 1):
             strict = attempt > 0
-            prompt = _build_prompt(strict=strict)
+            title = story.title
+            publishers_str = publishers
+            prompt = _build_prompt(strict=strict, title=title, publishers_str=publishers_str)
+            if len(prompt) > MAX_CLASSIFIER_INPUT_CHARS:
+                overflow = len(prompt) - MAX_CLASSIFIER_INPUT_CHARS
+                if overflow > 0 and len(title) > 20:
+                    trim = min(overflow, len(title) - 20)
+                    title = title[:-trim] + "..."
+                    prompt = _build_prompt(strict=strict, title=title, publishers_str=publishers_str)
+                    overflow = len(prompt) - MAX_CLASSIFIER_INPUT_CHARS
+                if overflow > 0 and len(publishers_str) > 20:
+                    trim = min(overflow, len(publishers_str) - 20)
+                    publishers_str = publishers_str[:-trim] + "..."
+                    prompt = _build_prompt(strict=strict, title=title, publishers_str=publishers_str)
+                    overflow = len(prompt) - MAX_CLASSIFIER_INPUT_CHARS
+                if overflow > 0:
+                    logger.warning(
+                        "Classifier prompt truncated | title=%s chars=%d limit=%d",
+                        story.title[:50],
+                        len(prompt),
+                        MAX_CLASSIFIER_INPUT_CHARS,
+                    )
+                    suffix = "\n\nJSON:"
+                    prompt = prompt[: MAX_CLASSIFIER_INPUT_CHARS - len(suffix)] + suffix
 
-            resp = await self._client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0 if strict else 0.1,
-                top_p=0.1,
-                stream=False,
-            )
+            try:
+                resp = await asyncio.wait_for(
+                    self._client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1,
+                        top_p=0.1,
+                        max_tokens=MAX_CLASSIFIER_OUTPUT_TOKENS,
+                        stream=False,
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.warning(
+                        "Local classification timed out | attempt=%d/%d title=%s timeout=%ds",
+                        attempt + 1,
+                        max_retries + 1,
+                        story.title[:50],
+                        timeout_seconds,
+                    )
+                    continue
+                raise
 
             content = resp.choices[0].message.content.strip()
             json_str = None
@@ -409,20 +453,28 @@ Published: {story.pub_date.strftime("%Y-%m-%d %H:%M")}"""
                 reasoning=f"Classification error ({type(e).__name__}): {e}",
             )
 
+    def _default_max_concurrent(self) -> int:
+        """Default concurrency based on model type."""
+        return 3 if self._local_model else 20
+
     async def classify_batch(
         self,
         stories: list[Story],
-        max_concurrent: int = 5,
+        max_concurrent: int | None = None,
     ) -> list[tuple[Story, ClassificationResult]]:
         """Classify multiple stories concurrently.
 
         Args:
             stories: Stories to classify
-            max_concurrent: Max concurrent API calls
+            max_concurrent: Max concurrent API calls (None uses model defaults)
 
         Returns:
             List of (story, classification) tuples
         """
+        if max_concurrent is None:
+            max_concurrent = self._default_max_concurrent()
+        elif self._local_model:
+            max_concurrent = min(max_concurrent, self._default_max_concurrent())
         total = len(stories)
         completed = 0
         semaphore = asyncio.Semaphore(max_concurrent)
