@@ -13,9 +13,11 @@ The extracted text is used by the researcher agent to understand
 the full context of news stories beyond the RSS description.
 """
 
+import gzip
 import html
 import logging
 import re
+import zlib
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import StringIO
@@ -25,6 +27,10 @@ import aiohttp
 from tools.utils import create_ssl_context, USER_AGENT
 
 logger = logging.getLogger(__name__)
+try:
+    import brotli  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    brotli = None
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -117,21 +123,46 @@ async def fetch_article(
     """
     logger.debug("Fetching article: %s", url)
 
+    def _decode_body(resp: aiohttp.ClientResponse, body: bytes) -> str:
+        enc_header = resp.headers.get("Content-Encoding", "")
+        encodings = [enc.strip().lower() for enc in enc_header.split(",") if enc.strip()]
+        for encoding in reversed(encodings):
+            if encoding == "br":
+                if brotli is None:
+                    raise RuntimeError("brotli not available to decode br content")
+                body = brotli.decompress(body)
+            elif encoding == "gzip":
+                body = gzip.decompress(body)
+            elif encoding == "deflate":
+                try:
+                    body = zlib.decompress(body)
+                except zlib.error:
+                    body = zlib.decompress(body, -zlib.MAX_WBITS)
+            elif encoding in ("identity", ""):
+                continue
+            else:
+                raise RuntimeError(f"Unsupported content encoding: {encoding}")
+        charset = resp.charset or "utf-8"
+        return body.decode(charset, errors="replace")
+
     async def fetch_with_ssl(session: aiohttp.ClientSession, verify: bool) -> str:
+        accept_encoding = "gzip, deflate, br" if brotli is not None else "gzip, deflate"
         async with session.get(
             url,
             timeout=aiohttp.ClientTimeout(total=timeout),
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": USER_AGENT, "Accept-Encoding": accept_encoding},
+            auto_decompress=False,
             ssl=create_ssl_context(verify),
         ) as resp:
             if resp.status != 200:
                 raise aiohttp.ClientResponseError(
                     resp.request_info, resp.history, status=resp.status
                 )
-            return await resp.text()
+            raw = await resp.read()
+            return _decode_body(resp, raw)
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(auto_decompress=False) as session:
             try:
                 html_content = await fetch_with_ssl(session, verify=True)
             except aiohttp.ClientSSLError:
