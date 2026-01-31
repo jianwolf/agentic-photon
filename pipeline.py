@@ -96,10 +96,31 @@ class PipelineStats:
         return d
 
 
-def _is_arxiv_story(story: Story) -> bool:
-    """Return True if the story appears to be from arXiv."""
+def _is_research_source(story: Story) -> bool:
+    """Return True if the story appears to be from a research venue."""
+    research_domains = (
+        "arxiv.org",
+        "doi.org",
+        "openreview.net",
+        "biorxiv.org",
+        "medrxiv.org",
+        "nature.com",
+        "science.org",
+        "springer.com",
+        "acm.org",
+        "ieee.org",
+    )
     for url in (story.article_url, story.source_url):
-        if url and "arxiv.org" in url.lower():
+        if not url:
+            continue
+        lower = url.lower()
+        if any(domain in lower for domain in research_domains):
+            return True
+        if "://" in lower:
+            host = lower.split("://", 1)[1].split("/", 1)[0]
+        else:
+            host = lower.split("/", 1)[0]
+        if host.endswith(".edu"):
             return True
     return False
 
@@ -109,10 +130,10 @@ def _route_story(
     classification: ClassificationResult | None,
 ) -> str:
     """Route a story to the appropriate researcher track."""
-    if _is_arxiv_story(story):
+    if _is_research_source(story):
         return "research"
     if classification and classification.category == ImportanceCategory.RESEARCH:
-        return "research"
+        return "tech"
     return "tech"
 
 
@@ -311,18 +332,18 @@ class Pipeline:
                 "tech": [],
                 "research": [],
             }
-            arxiv_forced = 0
+            research_forced = 0
             for story, classification in important:
-                if _is_arxiv_story(story):
-                    arxiv_forced += 1
+                if _is_research_source(story):
+                    research_forced += 1
                 route_buckets[_route_story(story, classification)].append((story, classification))
 
             logger.info("Classification complete | important=%d skip=%d", len(important), len(not_important))
             logger.info(
-                "Routing complete | tech=%d research=%d arxiv_forced=%d",
+                "Routing complete | tech=%d research=%d research_forced=%d",
                 len(route_buckets["tech"]),
                 len(route_buckets["research"]),
-                arxiv_forced,
+                research_forced,
             )
 
             # Save non-important stories (no embedding needed)

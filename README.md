@@ -53,7 +53,7 @@ This project demonstrates several engineering decisions optimized for **cost eff
 
 - **Agent-Based Architecture**: Separate classifier and researcher agents with structured outputs
 - **Async Pipeline**: Concurrent feed fetching and processing with aiohttp
-- **Local Classification**: Fast importance classification using local MLX model (Ministral-3B) on Apple Silicon
+- **Local Classification**: Fast importance classification using local MLX model (Ministral-3-3B-Instruct-2512) on Apple Silicon
 - **Deep Analysis**: Research agent with Gemini + Google Search grounding (no custom tool round-trips)
 - **Flexible Output**: Markdown reports, webhooks, and JSONL alerts
 - **Bilingual Support**: Chinese (zh) and English (en) with language-specific prompts
@@ -153,6 +153,8 @@ All settings via environment variables:
 | `CLASSIFIER_MODEL` | `google-gla:gemini-3-flash-preview` | Classifier model for programmatic runs (CLI uses MLX by default) |
 | `RESEARCHER_MODEL` | `google-gla:gemini-3-flash-preview` | Model for analysis |
 | `RESEARCHER_MODEL_PRO` | `google-gla:gemini-3-pro-preview` | Alternate researcher model for comparisons |
+| `SUMMARY_ENABLED` | `true` | Enable per-run digest generation |
+| `SUMMARY_MODEL` | `google-gla:gemini-3-flash-preview` | Model for digests |
 | `MAX_AGE_HOURS` | `24` | Max story age (1 day) |
 | `POLL_INTERVAL_SECONDS` | `300` | Polling interval (5 min) |
 | `PRUNE_AFTER_DAYS` | `30` | Auto-delete older records |
@@ -174,7 +176,7 @@ All settings via environment variables:
 ## Architecture (v2 - Grounded)
 
 ```
-RSS Feeds (17 sources)
+RSS Feeds (curated sources)
        │
        ▼
   Async Fetch ──► Dedup ──► Classifier (Local MLX or remote LLM)

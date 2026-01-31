@@ -292,7 +292,7 @@ class ClassifierAgent:
 3. Check if it matches any "Not Important" criteria
 4. Make your final decision
 """
-        return f"""{system_prompt}
+            return f"""{system_prompt}
 
 ---
 

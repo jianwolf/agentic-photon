@@ -447,7 +447,7 @@ def main() -> int:
         "--classifier-model",
         type=str,
         default="mlx-community/Ministral-3-3B-Instruct-2512",
-        help="Local MLX model for classification (default: Ministral-3B)",
+        help="Local MLX model for classification (default: mlx-community/Ministral-3-3B-Instruct-2512)",
     )
     run_parser.add_argument(
         "--mlx-port",

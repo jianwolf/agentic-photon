@@ -23,7 +23,7 @@ Environment Variables:
         SUMMARY_MODEL: Model for digest summarizer
 
     Pipeline Behavior:
-        MAX_AGE_HOURS: Maximum story age to process (default: 720 = 30 days)
+        MAX_AGE_HOURS: Maximum story age to process (default: 24 = 1 day)
         POLL_INTERVAL_SECONDS: Delay between runs in continuous mode
         MAX_WORKERS: Maximum concurrent operations
 
@@ -149,8 +149,8 @@ DEFAULT_RSS_URLS = [
     "https://huggingface.co/blog/feed.xml",       # Hugging Face
     "https://www.microsoft.com/en-us/research/feed/",  # Microsoft Research
     "http://news.mit.edu/rss/topic/artificial-intelligence2",  # MIT AI news
-    "http://arxiv.org/rss/cs.LG",                 # arXiv Machine Learning
-    "http://arxiv.org/rss/cs.CL",                 # arXiv Computation & Language (NLP)
+    # "http://arxiv.org/rss/cs.LG",               # arXiv Machine Learning (disabled: too much noise in new entries)
+    # "http://arxiv.org/rss/cs.CL",               # arXiv Computation & Language (NLP) (disabled: too much noise in new entries)
     "https://raw.githubusercontent.com/conoro/anthropic-engineering-rss-feed/main/anthropic_engineering_rss.xml",  # Anthropic (community)
 
     # === Tech Company Engineering Blogs ===
