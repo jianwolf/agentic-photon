@@ -151,7 +151,7 @@ DEFAULT_RSS_URLS = [
     "http://news.mit.edu/rss/topic/artificial-intelligence2",  # MIT AI news
     # "http://arxiv.org/rss/cs.LG",               # arXiv Machine Learning (disabled: too much noise in new entries)
     # "http://arxiv.org/rss/cs.CL",               # arXiv Computation & Language (NLP) (disabled: too much noise in new entries)
-    "https://raw.githubusercontent.com/conoro/anthropic-engineering-rss-feed/main/anthropic_engineering_rss.xml",  # Anthropic (community)
+    # "https://raw.githubusercontent.com/conoro/anthropic-engineering-rss-feed/main/anthropic_engineering_rss.xml",  # Anthropic (community/unofficial)
 
     # === Tech Company Engineering Blogs ===
     # Infrastructure, scale, and engineering practices
@@ -167,8 +167,14 @@ DEFAULT_RSS_URLS = [
 
     # === AI/Tech News & Analysis ===
     # Industry news, reviews, and journalism
+    "https://feeds.bbci.co.uk/news/technology/rss.xml",  # BBC News Technology
+    "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",  # NYT Technology
     "https://feeds.arstechnica.com/arstechnica/index",  # Ars Technica
-    "https://venturebeat.com/category/ai/feed/",  # VentureBeat AI
+    "https://www.wired.com/feed/rss",               # WIRED
+    "https://www.theregister.com/headlines.atom",   # The Register
+    # "https://techcrunch.com/feed/",              # TechCrunch (often funding/PR-heavy)
+    # "https://www.geekwire.com/feed/",            # GeekWire (regional business focus)
+    # "https://venturebeat.com/category/ai/feed/", # VentureBeat AI (press-release/announcement heavy)
     "https://www.technologyreview.com/feed/",     # MIT Technology Review
     "https://www.404media.co/rss",                # 404 Media - tech journalism
 
