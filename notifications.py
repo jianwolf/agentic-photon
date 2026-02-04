@@ -57,21 +57,48 @@ def _sanitize_filename(title: str, max_length: int = 50) -> str:
     return s.strip()
 
 
+def _route_tag(route: str | None) -> str | None:
+    """Normalize a route label for filenames."""
+    if not route:
+        return None
+    tag = re.sub(r"[^a-z0-9]+", "_", route.lower()).strip("_")
+    return tag or None
+
+
+def _build_report_filename(title: str, timestamp: str, route: str | None) -> str:
+    """Build a report filename with an optional route tag."""
+    safe_title = _sanitize_filename(title)
+    tag = _route_tag(route)
+    if tag:
+        return f"{timestamp}_{tag}_{safe_title}.md"
+    return f"{timestamp}_{safe_title}.md"
+
+
+def _build_digest_filename(timestamp: str, route: str | None) -> str:
+    """Build a digest filename with an optional route tag."""
+    tag = _route_tag(route)
+    if tag:
+        return f"{timestamp}_{tag}_digest.md"
+    return f"{timestamp}_digest.md"
+
+
 async def save_markdown_report(
     story: Story,
     analysis: Analysis,
     reports_dir: Path,
+    route: str | None = None,
 ) -> Path | None:
     """Save markdown report for an analyzed story."""
     try:
         reports_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_{_sanitize_filename(story.title)}.md"
+        now = datetime.now()
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        filename = _build_report_filename(story.title, timestamp, route)
         filepath = reports_dir / filename
 
         pub_date_str = story.pub_date.strftime('%Y-%m-%d %H:%M')
-        analyzed_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        analyzed_str = now.strftime('%Y-%m-%d %H:%M:%S')
 
         lines = [
             f"# {story.title}",
@@ -106,13 +133,17 @@ async def save_markdown_report(
         return None
 
 
-async def save_digest_report(digest_markdown: str, reports_dir: Path) -> Path | None:
+async def save_digest_report(
+    digest_markdown: str,
+    reports_dir: Path,
+    route: str | None = None,
+) -> Path | None:
     """Save a per-run digest markdown file."""
     try:
         reports_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_digest.md"
+        filename = _build_digest_filename(timestamp, route)
         filepath = reports_dir / filename
         filepath.write_text(digest_markdown, encoding="utf-8")
         logger.info("Digest saved | file=%s", filepath.name)
@@ -188,10 +219,20 @@ async def append_alerts_file(story: Story, analysis: Analysis, filepath: str) ->
         return False
 
 
-async def notify(story: Story, analysis: Analysis, config: Config) -> tuple[bool, Path | None]:
+async def notify(
+    story: Story,
+    analysis: Analysis,
+    config: Config,
+    route: str | None = None,
+) -> tuple[bool, Path | None]:
     """Send all configured notifications for a story."""
     # Always save report
-    report_path = await save_markdown_report(story, analysis, config.reports_dir)
+    report_path = await save_markdown_report(
+        story,
+        analysis,
+        config.reports_dir,
+        route=route,
+    )
     report_ok = report_path is not None
 
     # Optional notifications
@@ -204,13 +245,14 @@ async def notify(story: Story, analysis: Analysis, config: Config) -> tuple[bool
 async def notify_batch(
     items: list[tuple[Story, Analysis]],
     config: Config,
+    route: str | None = None,
 ) -> tuple[int, int, list[Path]]:
     """Send notifications for multiple stories.
 
     Returns:
         (successful, failed, report_paths) counts and saved report paths
     """
-    tasks = [notify(story, analysis, config) for story, analysis in items]
+    tasks = [notify(story, analysis, config, route=route) for story, analysis in items]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     ok = 0

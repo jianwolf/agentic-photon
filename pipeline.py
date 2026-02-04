@@ -382,8 +382,6 @@ class Pipeline:
                     len(story_contexts),
                 )
 
-                route_reports_dir = self.config.reports_dir / route_name
-                route_config = replace(self.config, reports_dir=route_reports_dir)
                 max_concurrent = min(3, self.config.max_workers)
                 semaphore = asyncio.Semaphore(max_concurrent)
                 stats_lock = asyncio.Lock()
@@ -424,7 +422,12 @@ class Pipeline:
                                     if embedding is not None:
                                         self.db.save_embedding(story_ctx.story.hash, embedding, commit=False)
 
-                                ok, report_path = await notify(story_ctx.story, analysis, route_config)
+                                ok, report_path = await notify(
+                                    story_ctx.story,
+                                    analysis,
+                                    self.config,
+                                    route=route_name,
+                                )
                                 async with stats_lock:
                                     if ok:
                                         stats.notified += 1
@@ -468,7 +471,11 @@ class Pipeline:
                             report_paths,
                             label=route_name.title(),
                         )
-                        digest_path = await save_digest_report(digest_md, route_reports_dir)
+                        digest_path = await save_digest_report(
+                            digest_md,
+                            self.config.reports_dir,
+                            route=route_name,
+                        )
                         if digest_path:
                             logger.info(
                                 "Digest saved | route=%s file=%s reports=%d tokens=%d/%d",

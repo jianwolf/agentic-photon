@@ -95,7 +95,7 @@ python main.py digest --reports-dir reports
 
 Note: `main.py run` starts a local MLX classifier by default (Apple Silicon). For non-Apple platforms, use the programmatic pipeline with `CLASSIFIER_MODEL` set to a remote model.
 
-Reports are now routed by type: tech news reports are saved under `reports/tech/` and AI/ML research reports under `reports/research/` with separate digests per track.
+Reports are now routed by type: tech news reports include `tech` in the filename and AI/ML research reports include `research`, with separate digests per track in the same `reports/` directory.
 
 ## MLE Workflows (Evaluation & Benchmarking)
 
